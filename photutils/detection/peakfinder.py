@@ -1,7 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for finding local peaks in an astronomical
-image.
+Define tools for finding local peaks in an astronomical image.
 """
 
 import warnings
@@ -11,6 +10,7 @@ from astropy.table import QTable
 from scipy.ndimage import maximum_filter
 
 from photutils.utils._misc import _get_meta
+from photutils.utils._parameters import as_pair
 from photutils.utils._quantity_helpers import process_quantities
 from photutils.utils._stats import nanmin
 from photutils.utils.exceptions import NoDetectionsWarning
@@ -74,9 +74,13 @@ def find_peaks(data, threshold, *, box_size=3, footprint=None, mask=None,
         A boolean mask with the same shape as ``data``, where a `True`
         value indicates the corresponding element of ``data`` is masked.
 
-    border_width : bool, optional
+    border_width : int, array_like of int, or None, optional
         The width in pixels to exclude around the border of the
-        ``data``.
+        ``data``. If ``border_width`` is a scalar then ``border_width``
+        will be applied to all sides. If ``border_width`` has two
+        elements, they must be in ``(ny, nx)`` order. If `None`, then no
+        border is excluded. The border width values must be non-negative
+        integers.
 
     npeaks : int, optional
         The maximum number of peaks to return. When the number of
@@ -126,7 +130,6 @@ def find_peaks(data, threshold, *, box_size=3, footprint=None, mask=None,
     arrays, unit = process_quantities((data, threshold, error),
                                       ('data', 'threshold', 'error'))
     data, threshold, error = arrays
-
     data = np.asanyarray(data)
 
     if np.all(data == data.flat[0]):
@@ -137,8 +140,13 @@ def find_peaks(data, threshold, *, box_size=3, footprint=None, mask=None,
     if not np.isscalar(threshold):
         threshold = np.asanyarray(threshold)
         if data.shape != threshold.shape:
-            raise ValueError('A threshold array must have the same shape as '
-                             'the input data.')
+            msg = ('A threshold array must have the same shape as the '
+                   'input data')
+            raise ValueError(msg)
+
+    if border_width is not None:
+        border_width = as_pair('border_width', border_width,
+                               lower_bound=(0, 0), upper_bound=data.shape)
 
     # remove NaN values to avoid runtime warnings
     nan_mask = np.isnan(data)
@@ -155,20 +163,27 @@ def find_peaks(data, threshold, *, box_size=3, footprint=None, mask=None,
 
     peak_goodmask = (data == data_max)  # good pixels are True
 
+    # Exclude peaks that are masked
     if mask is not None:
         mask = np.asanyarray(mask)
         if data.shape != mask.shape:
-            raise ValueError('data and mask must have the same shape')
+            msg = 'data and mask must have the same shape'
+            raise ValueError(msg)
         peak_goodmask = np.logical_and(peak_goodmask, ~mask)
 
+    # Exclude peaks that are too close to the border
     if border_width is not None:
-        for i in range(peak_goodmask.ndim):
-            peak_goodmask = peak_goodmask.swapaxes(0, i)
-            peak_goodmask[:border_width] = False
-            peak_goodmask[-border_width:] = False
-            peak_goodmask = peak_goodmask.swapaxes(0, i)
+        ny, nx = border_width
+        if ny > 0:
+            peak_goodmask[:ny, :] = False
+            peak_goodmask[-ny:, :] = False
+        if nx > 0:
+            peak_goodmask[:, :nx] = False
+            peak_goodmask[:, -nx:] = False
 
+    # Exclude peaks below the threshold
     peak_goodmask = np.logical_and(peak_goodmask, (data > threshold))
+
     y_peaks, x_peaks = peak_goodmask.nonzero()
     peak_values = data[y_peaks, x_peaks]
 
@@ -204,7 +219,8 @@ def find_peaks(data, threshold, *, box_size=3, footprint=None, mask=None,
         from photutils.centroids import centroid_sources
 
         if not callable(centroid_func):
-            raise TypeError('centroid_func must be a callable object')
+            msg = 'centroid_func must be a callable object'
+            raise TypeError(msg)
 
         x_centroids, y_centroids = centroid_sources(
             data, x_peaks, y_peaks, box_size=box_size,

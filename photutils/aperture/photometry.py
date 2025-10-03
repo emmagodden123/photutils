@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines tools to perform aperture photometry.
+Define tools to perform aperture photometry.
 """
 
 import warnings
@@ -70,24 +70,24 @@ def aperture_photometry(data, apertures, error=None, mask=None,
         types. Note that the more precise methods are generally slower.
         The following methods are available:
 
-            * ``'exact'`` (default):
-                The exact fractional overlap of the aperture and each
-                pixel is calculated. The aperture weights will contain
-                values between 0 and 1.
+        * ``'exact'`` (default):
+            The exact fractional overlap of the aperture and each pixel
+            is calculated. The aperture weights will contain values
+            between 0 and 1.
 
-            * ``'center'``:
-                A pixel is considered to be entirely in or out of the
-                aperture depending on whether its center is in or out of
-                the aperture. The aperture weights will contain values
-                only of 0 (out) and 1 (in).
+        * ``'center'``:
+            A pixel is considered to be entirely in or out of the
+            aperture depending on whether its center is in or out of the
+            aperture. The aperture weights will contain values only of 0
+            (out) and 1 (in).
 
-            * ``'subpixel'``:
-                A pixel is divided into subpixels (see the ``subpixels``
-                keyword), each of which are considered to be entirely in
-                or out of the aperture depending on whether its center
-                is in or out of the aperture. If ``subpixels=1``, this
-                method is equivalent to ``'center'``. The aperture
-                weights will contain values between 0 and 1.
+        * ``'subpixel'``:
+            A pixel is divided into subpixels (see the ``subpixels``
+            keyword), each of which are considered to be entirely in
+            or out of the aperture depending on whether its center is
+            in or out of the aperture. If ``subpixels=1``, this method
+            is equivalent to ``'center'``. The aperture weights will
+            contain values between 0 and 1.
 
     subpixels : int, optional
         For the ``'subpixel'`` method, resample pixels by this factor
@@ -99,34 +99,34 @@ def aperture_photometry(data, apertures, error=None, mask=None,
         A world coordinate system (WCS) transformation that
         supports the `astropy shared interface for WCS
         <https://docs.astropy.org/en/stable/wcs/wcsapi.html>`_ (e.g.,
-        `astropy.wcs.WCS`, `gwcs.wcs.WCS`). Used only if the input
-        ``apertures`` contains a `SkyAperture` or `~regions.SkyRegion`
-        object.
+        `astropy.wcs.WCS`, `gwcs.wcs.WCS`). If provided, the output
+        table will include a ``'sky_center'`` column with the sky
+        coordinates of the input aperture center(s). This keyword is
+        required if the input ``apertures`` contains a `SkyAperture` or
+        `~regions.SkyRegion`.
 
     Returns
     -------
     table : `~astropy.table.QTable`
         A table of the photometry with the following columns:
 
-            * ``'id'``:
-              The source ID.
+        * ``'id'``:
+          The source ID.
 
-            * ``'xcenter'``, ``'ycenter'``:
-              The ``x`` and ``y`` pixel coordinates of the input
-              aperture center(s).
+        * ``'xcenter'``, ``'ycenter'``:
+          The ``x`` and ``y`` pixel coordinates of the input aperture
+          center(s).
 
-            * ``'sky_center'``:
-              The sky coordinates of the input aperture center(s).
-              Returned only if the input ``apertures`` is a
-              `SkyAperture` object.
+        * ``'sky_center'``:
+          The sky coordinates of the input aperture center(s). Returned
+          if a ``wcs`` is input.
 
-            * ``'aperture_sum'``:
-              The sum of the values within the aperture.
+        * ``'aperture_sum'``:
+          The sum of the values within the aperture.
 
-            * ``'aperture_sum_err'``:
-              The corresponding uncertainty in the ``'aperture_sum'``
-              values. Returned only if the input ``error`` is not
-              `None`.
+        * ``'aperture_sum_err'``:
+          The corresponding uncertainty in the ``'aperture_sum'``
+          values. Returned only if the input ``error`` is not `None`.
 
         The table metadata includes the Astropy and Photutils version
         numbers and the `aperture_photometry` calling arguments.
@@ -200,9 +200,9 @@ def aperture_photometry(data, apertures, error=None, mask=None,
     skyaper = False
     if isinstance(apertures[0], SkyAperture):
         if wcs is None:
-            raise ValueError('A WCS transform must be defined by the input '
-                             'data or the wcs keyword when using a '
-                             'SkyAperture object.')
+            msg = ('A WCS transform must be defined by the input data or '
+                   'the wcs keyword when using a SkyAperture object.')
+            raise ValueError(msg)
 
         # used to include SkyCoord position in the output table
         skyaper = True
@@ -214,8 +214,8 @@ def aperture_photometry(data, apertures, error=None, mask=None,
     positions = apertures[0].positions
     for aper in apertures[1:]:
         if not np.array_equal(aper.positions, positions):
-            raise ValueError('Input apertures must all have identical '
-                             'positions.')
+            msg = 'Input apertures must all have identical positions'
+            raise ValueError(msg)
 
     # define output table meta data
     meta = _get_meta()
@@ -229,7 +229,7 @@ def aperture_photometry(data, apertures, error=None, mask=None,
     positions = np.atleast_2d(apertures[0].positions)
     tbl['id'] = np.arange(positions.shape[0], dtype=int) + 1
 
-    xypos_pixel = np.transpose(positions) * u.pixel
+    xypos_pixel = np.transpose(positions)
     tbl['xcenter'] = xypos_pixel[0]
     tbl['ycenter'] = xypos_pixel[1]
 
@@ -239,6 +239,9 @@ def aperture_photometry(data, apertures, error=None, mask=None,
             tbl['sky_center'] = skycoord_pos.reshape((-1,))
         else:
             tbl['sky_center'] = skycoord_pos
+
+    if wcs is not None and not skyaper:
+        tbl['sky_center'] = wcs.pixel_to_world(*np.transpose(positions))
 
     sum_key_main = 'aperture_sum'
     sum_err_key_main = 'aperture_sum_err'

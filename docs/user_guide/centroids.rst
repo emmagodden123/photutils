@@ -5,7 +5,9 @@ Introduction
 ------------
 
 `photutils.centroids` provides several functions to calculate the
-centroid of a single source:
+centroid of one or more sources.
+
+The following functions calculate the centroid of a single source:
 
 * :func:`~photutils.centroids.centroid_com`: Calculates the object
   "center of mass" from 2D image moments.
@@ -87,7 +89,7 @@ centroiding functions::
 
     >>> x4, y4 = centroid_2dg(data)
     >>> print(np.array((x4, y4)))  # doctest: +FLOAT_CMP
-    [19.9850329  20.01484321]
+    [19.9851944  20.01490157]
 
 The measured centroids are all very close to the true centroid of the object
 in the cutout image of ``(20, 20)``.

@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module implements the StarFinder class.
+Define the StarFinder class.
 """
 
 import inspect
@@ -51,13 +51,13 @@ class StarFinder(StarFinderBase):
         will be selected.
 
     peakmax : float, None, optional
-        The maximum allowed peak pixel value in an object. Only objects
-        whose peak pixel values are strictly smaller than ``peakmax``
-        will be selected. This may be used, for example, to exclude
-        saturated sources. If the star finder is run on an image that is
-        a `~astropy.units.Quantity` array, then ``peakmax`` must have
-        the same units. If ``peakmax`` is set to `None`, then no peak
-        pixel value filtering will be performed.
+        The maximum allowed peak pixel value in an object. Objects with
+        peak pixel values greater than ``peakmax`` will be rejected.
+        This keyword may be used, for example, to exclude saturated
+        sources. If the star finder is run on an image that is a
+        `~astropy.units.Quantity` array, then ``peakmax`` must have the
+        same units. If ``peakmax`` is set to `None`, then no peak pixel
+        value filtering will be performed.
 
     See Also
     --------
@@ -86,7 +86,8 @@ class StarFinder(StarFinderBase):
         self.threshold = threshold
         self.kernel = kernel
         if min_separation < 0:
-            raise ValueError('min_separation must be >= 0')
+            msg = 'min_separation must be >= 0'
+            raise ValueError(msg)
         self.min_separation = min_separation
         self.exclude_border = exclude_border
         self.brightest = _validate_brightest(brightest)
@@ -96,7 +97,8 @@ class StarFinder(StarFinderBase):
         kernel = self.kernel
         kernel /= np.max(kernel)  # normalize max value to 1.0
         denom = np.sum(kernel**2) - (np.sum(kernel)**2 / kernel.size)
-        kernel = (kernel - np.sum(kernel) / kernel.size) / denom
+        if denom > 0:
+            kernel = (kernel - np.sum(kernel) / kernel.size) / denom
 
         convolved_data = _filter_data(data, kernel, mode='constant',
                                       fill_value=0.0,
@@ -185,13 +187,13 @@ class _StarFinderCatalog:
         will be selected.
 
     peakmax : float, None, optional
-        The maximum allowed peak pixel value in an object. Only objects
-        whose peak pixel values are strictly smaller than ``peakmax``
-        will be selected. This may be used, for example, to exclude
-        saturated sources. If the star finder is run on an image that is
-        a `~astropy.units.Quantity` array, then ``peakmax`` must have
-        the same units. If ``peakmax`` is set to `None`, then no peak
-        pixel value filtering will be performed.
+        The maximum allowed peak pixel value in an object. Objects with
+        peak pixel values greater than ``peakmax`` will be rejected.
+        This keyword may be used, for example, to exclude saturated
+        sources. If the star finder is run on an image that is a
+        `~astropy.units.Quantity` array, then ``peakmax`` must have the
+        same units. If ``peakmax`` is set to `None`, then no peak pixel
+        value filtering will be performed.
     """
 
     def __init__(self, data, xypos, shape, *, brightest=None, peakmax=None):
@@ -415,9 +417,9 @@ class _StarFinderCatalog:
             warnings.warn('No sources were found.', NoDetectionsWarning)
             return None
 
-        # filter based on peakmax
+        # keep sources with peak pixel values less than or equal to peakmax
         if newcat.peakmax is not None:
-            mask = (newcat.max_value < newcat.peakmax)
+            mask = (newcat.max_value <= newcat.peakmax)
             newcat = newcat[mask]
 
         if len(newcat) == 0:

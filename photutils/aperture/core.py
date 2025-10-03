@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines the base aperture classes.
+Define the base aperture classes.
 """
 
 import abc
@@ -16,7 +16,7 @@ from astropy.utils import lazyproperty
 from photutils.aperture.bounding_box import BoundingBox
 from photutils.utils._wcs_helpers import _pixel_scale_angle_at_skycoord
 
-__all__ = ['Aperture', 'SkyAperture', 'PixelAperture']
+__all__ = ['Aperture', 'PixelAperture', 'SkyAperture']
 
 
 class Aperture(metaclass=abc.ABCMeta):
@@ -28,14 +28,15 @@ class Aperture(metaclass=abc.ABCMeta):
 
     def __len__(self):
         if self.isscalar:
-            raise TypeError(f'A scalar {self.__class__.__name__!r} object '
-                            'has no len()')
+            msg = f'A scalar {self.__class__.__name__!r} object has no len()'
+            raise TypeError(msg)
         return self.shape[0]
 
     def __getitem__(self, index):
         if self.isscalar:
-            raise TypeError(f'A scalar {self.__class__.__name__!r} object '
-                            'cannot be indexed')
+            msg = (f'A scalar {self.__class__.__name__!r} object cannot be '
+                   'indexed')
+            raise TypeError(msg)
 
         kwargs = {}
         for param in self._params:
@@ -58,8 +59,8 @@ class Aperture(metaclass=abc.ABCMeta):
         if isinstance(self, SkyAperture):
             return repr(self.positions)
 
-        raise TypeError('Aperture must be a subclass of PixelAperture '
-                        'or SkyAperture')
+        msg = 'Aperture must be a subclass of PixelAperture or SkyAperture'
+        raise TypeError(msg)
 
     def __repr__(self):
         prefix = f'{self.__class__.__name__}'
@@ -154,7 +155,8 @@ class Aperture(metaclass=abc.ABCMeta):
         The aperture positions, as an array of (x, y) coordinates or a
         `~astropy.coordinates.SkyCoord`.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
     @lazyproperty
     def shape(self):
@@ -194,7 +196,8 @@ class PixelAperture(Aperture):
     @staticmethod
     def _translate_mask_mode(mode, subpixels, rectangle=False):
         if mode not in ('center', 'subpixel', 'exact'):
-            raise ValueError(f'Invalid mask mode: {mode}')
+            msg = f'Invalid mask mode: {mode}'
+            raise ValueError(msg)
 
         if rectangle and mode == 'exact':
             mode = 'subpixel'
@@ -202,7 +205,8 @@ class PixelAperture(Aperture):
 
         if ((mode == 'subpixel')
                 and (not isinstance(subpixels, int) or subpixels <= 0)):
-            raise ValueError('subpixels must be a strictly positive integer')
+            msg = 'subpixels must be a strictly positive integer'
+            raise ValueError(msg)
 
         if mode == 'center':
             use_exact = 0
@@ -215,6 +219,7 @@ class PixelAperture(Aperture):
 
         return use_exact, subpixels
 
+    @property
     @abc.abstractmethod
     def _xy_extents(self):
         """
@@ -224,7 +229,8 @@ class PixelAperture(Aperture):
         In other words, the (x, y) extents are half of the aperture
         minimal bounding box size in each dimension.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
     @lazyproperty
     def _positions(self):
@@ -282,6 +288,7 @@ class PixelAperture(Aperture):
 
         return edges
 
+    @property
     @abc.abstractmethod
     def area(self):
         """
@@ -301,7 +308,8 @@ class PixelAperture(Aperture):
         --------
         area_overlap
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
     def area_overlap(self, data, *, mask=None, method='exact', subpixels=5):
         """
@@ -331,25 +339,24 @@ class PixelAperture(Aperture):
             aperture types. Note that the more precise methods are
             generally slower. The following methods are available:
 
-                * ``'exact'`` (default):
-                  The exact fractional overlap of the aperture and each
-                  pixel is calculated. The aperture weights will contain
-                  values between 0 and 1.
+            * ``'exact'`` (default):
+              The exact fractional overlap of the aperture and each
+              pixel is calculated. The aperture weights will contain
+              values between 0 and 1.
 
-                * ``'center'``:
-                  A pixel is considered to be entirely in or out of the
-                  aperture depending on whether its center is in or out
-                  of the aperture. The aperture weights will contain
-                  values only of 0 (out) and 1 (in).
+            * ``'center'``:
+              A pixel is considered to be entirely in or out of the
+              aperture depending on whether its center is in or out of
+              the aperture. The aperture weights will contain values
+              only of 0 (out) and 1 (in).
 
-                * ``'subpixel'``:
-                  A pixel is divided into subpixels (see the
-                  ``subpixels`` keyword), each of which are considered
-                  to be entirely in or out of the aperture depending
-                  on whether its center is in or out of the aperture.
-                  If ``subpixels=1``, this method is equivalent to
-                  ``'center'``. The aperture weights will contain values
-                  between 0 and 1.
+            * ``'subpixel'``:
+              A pixel is divided into subpixels (see the ``subpixels``
+              keyword), each of which are considered to be entirely in
+              or out of the aperture depending on whether its center is
+              in or out of the aperture. If ``subpixels=1``, this method
+              is equivalent to ``'center'``. The aperture weights will
+              contain values between 0 and 1.
 
         subpixels : int, optional
             For the ``'subpixel'`` method, resample pixels by this
@@ -374,7 +381,8 @@ class PixelAperture(Aperture):
         if mask is not None:
             mask = np.asarray(mask)
             if mask.shape != data.shape:
-                raise ValueError('mask and data must have the same shape')
+                msg = 'mask and data must have the same shape'
+                raise ValueError(msg)
 
         areas = []
         for apermask in apermasks:
@@ -410,25 +418,24 @@ class PixelAperture(Aperture):
             aperture types. Note that the more precise methods are
             generally slower. The following methods are available:
 
-                * ``'exact'`` (default):
-                  The exact fractional overlap of the aperture and each
-                  pixel is calculated. The aperture weights will contain
-                  values between 0 and 1.
+            * ``'exact'`` (default):
+              The exact fractional overlap of the aperture and each
+              pixel is calculated. The aperture weights will contain
+              values between 0 and 1.
 
-                * ``'center'``:
-                  A pixel is considered to be entirely in or out of the
-                  aperture depending on whether its center is in or out
-                  of the aperture. The aperture weights will contain
-                  values only of 0 (out) and 1 (in).
+            * ``'center'``:
+              A pixel is considered to be entirely in or out of the
+              aperture depending on whether its center is in or out of
+              the aperture. The aperture weights will contain values
+              only of 0 (out) and 1 (in).
 
-                * ``'subpixel'``:
-                  A pixel is divided into subpixels (see the
-                  ``subpixels`` keyword), each of which are considered
-                  to be entirely in or out of the aperture depending
-                  on whether its center is in or out of the aperture.
-                  If ``subpixels=1``, this method is equivalent to
-                  ``'center'``. The aperture weights will contain values
-                  between 0 and 1.
+            * ``'subpixel'``:
+              A pixel is divided into subpixels (see the ``subpixels``
+              keyword), each of which are considered to be entirely in
+              or out of the aperture depending on whether its center is
+              in or out of the aperture. If ``subpixels=1``, this method
+              is equivalent to ``'center'``. The aperture weights will
+              contain values between 0 and 1.
 
         subpixels : int, optional
             For the ``'subpixel'`` method, resample pixels by this
@@ -445,7 +452,8 @@ class PixelAperture(Aperture):
             otherwise a list of `~photutils.aperture.ApertureMask` is
             returned.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
     def do_photometry(self, data, error=None, mask=None, method='exact',
                       subpixels=5):
@@ -476,25 +484,24 @@ class PixelAperture(Aperture):
             aperture types. Note that the more precise methods are
             generally slower. The following methods are available:
 
-                * ``'exact'`` (default):
-                  The exact fractional overlap of the aperture and each
-                  pixel is calculated. The aperture weights will contain
-                  values between 0 and 1.
+            * ``'exact'`` (default):
+              The exact fractional overlap of the aperture and each
+              pixel is calculated. The aperture weights will contain
+              values between 0 and 1.
 
-                * ``'center'``:
-                  A pixel is considered to be entirely in or out of the
-                  aperture depending on whether its center is in or out
-                  of the aperture. The aperture weights will contain
-                  values only of 0 (out) and 1 (in).
+            * ``'center'``:
+              A pixel is considered to be entirely in or out of the
+              aperture depending on whether its center is in or out of
+              the aperture. The aperture weights will contain values
+              only of 0 (out) and 1 (in).
 
-                * ``'subpixel'``:
-                  A pixel is divided into subpixels (see the
-                  ``subpixels`` keyword), each of which are considered
-                  to be entirely in or out of the aperture depending
-                  on whether its center is in or out of the aperture.
-                  If ``subpixels=1``, this method is equivalent to
-                  ``'center'``. The aperture weights will contain values
-                  between 0 and 1.
+            * ``'subpixel'``:
+              A pixel is divided into subpixels (see the ``subpixels``
+              keyword), each of which are considered to be entirely in
+              or out of the aperture depending on whether its center is
+              in or out of the aperture. If ``subpixels=1``, this method
+              is equivalent to ``'center'``. The aperture weights will
+              contain values between 0 and 1.
 
         subpixels : int, optional
             For the ``'subpixel'`` method, resample pixels by this
@@ -525,19 +532,22 @@ class PixelAperture(Aperture):
         """
         data = np.asanyarray(data)
         if data.ndim != 2:
-            raise ValueError('data must be a 2D array.')
+            msg = 'data must be a 2D array'
+            raise ValueError(msg)
 
         if error is not None:
             error = np.asanyarray(error)
             if error.shape != data.shape:
-                raise ValueError('error and data must have the same shape.')
+                msg = 'error and data must have the same shape'
+                raise ValueError(msg)
 
         # check Quantity inputs
         unit = {getattr(arr, 'unit', None) for arr in (data, error)
                 if arr is not None}
         if len(unit) > 1:
-            raise ValueError('If data or error has units, then they both must '
-                             'have the same units.')
+            msg = ('If data or error has units, then they both must have '
+                   'the same units')
+            raise ValueError(msg)
 
         # strip data and error units for performance
         unit = unit.pop()
@@ -668,7 +678,8 @@ class PixelAperture(Aperture):
             single `~matplotlib.patches.Patch` is returned, otherwise a
             list of `~matplotlib.patches.Patch` is returned.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
     def plot(self, ax=None, origin=(0, 0), **kwargs):
         """
@@ -754,7 +765,7 @@ class PixelAperture(Aperture):
                 # the semimajor axis (i.e., relative to the WCS latitude
                 # axis). region sky angles are defined relative to the WCS
                 # longitude axis.
-                value = (value * u.rad) - angle.to(u.rad)
+                value = value - angle.to(u.rad)
             else:
                 value = (value * u.pix * pixscale).to(u.arcsec)
 
@@ -781,7 +792,8 @@ class PixelAperture(Aperture):
         aperture : `SkyAperture` object
             A `SkyAperture` object.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
 
 class SkyAperture(Aperture):
@@ -835,7 +847,7 @@ class SkyAperture(Aperture):
                 # the semimajor axis (i.e., relative to the WCS latitude
                 # axis). region sky angles are defined relative to the WCS
                 # longitude axis.
-                value = (value + angle).to(u.radian).value
+                value = (value + angle).to(u.radian)
             elif value.unit.physical_type == 'angle':
                 value = (value / pixscale).to(u.pixel).value
             else:
@@ -864,7 +876,8 @@ class SkyAperture(Aperture):
         aperture : `PixelAperture` object
             A `PixelAperture` object.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
 
 def _aperture_metadata(aperture, index=''):

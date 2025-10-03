@@ -1,18 +1,17 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for calculating total error arrays.
+Define tools for calculating total error arrays.
 """
 
 import astropy.units as u
 import numpy as np
-from astropy.utils.misc import isiterable
 
 __all__ = ['calc_total_error']
 
 
 def calc_total_error(data, bkg_error, effective_gain):
     r"""
-    Calculate a total error array, combining a background-only error
+    Calculate a total error array by combining a background-only error
     array with the Poisson noise of sources.
 
     Parameters
@@ -59,6 +58,7 @@ def calc_total_error(data, bkg_error, effective_gain):
     photons) is:
 
     .. math::
+
         \sigma_{\mathrm{src}}  = \sqrt{g_{\mathrm{eff}} I}
 
     where :math:`g_{\mathrm{eff}}` is the effective gain
@@ -71,6 +71,7 @@ def calc_total_error(data, bkg_error, effective_gain):
     photons) is therefore:
 
     .. math::
+
         \sigma_{\mathrm{tot}}  = \sqrt{g_{\mathrm{eff}}^2
         \sigma_{\mathrm{bkg}}^2 + g_{\mathrm{eff}} I}
 
@@ -80,11 +81,13 @@ def calc_total_error(data, bkg_error, effective_gain):
     Converting back to the input ``data`` units gives:
 
     .. math::
+
         \sigma_{\mathrm{tot}}  = \frac{1}{g_{\mathrm{eff}}}
         \sqrt{g_{\mathrm{eff}}^2
         \sigma_{\mathrm{bkg}}^2 + g_{\mathrm{eff}} I}
 
     .. math::
+
         \sigma_{\mathrm{tot}} = \sqrt{\sigma_{\mathrm{bkg}}^2 +
                   \frac{I}{g_{\mathrm{eff}}}}
 
@@ -108,8 +111,11 @@ def calc_total_error(data, bkg_error, effective_gain):
     consider weight maps as gain maps (i.e., 'WEIGHT_GAIN=Y'; which is
     the default), one should input an ``effective_gain`` calculated as:
 
-    .. math:: g_{\mathrm{eff}}^{\prime} = g_{\mathrm{eff}} \left(
-       \frac{\mathrm{RMS_{\mathrm{median}}^2}}{\sigma_{\mathrm{bkg}}^2} \right)
+    .. math::
+
+        g_{\mathrm{eff}}^{\prime} = g_{\mathrm{eff}} \left(
+        \frac{\mathrm{RMS_{\mathrm{median}}^2}}{\sigma_{\mathrm{bkg}}^2}
+        \right)
 
     where :math:`g_{\mathrm{eff}}` is the effective gain,
     :math:`\sigma_{\mathrm{bkg}}` are the background-only errors,
@@ -124,7 +130,9 @@ def calc_total_error(data, bkg_error, effective_gain):
 
     In that case the total error is:
 
-    .. math:: \sigma_{\mathrm{tot}} = \sqrt{\sigma_{\mathrm{bkg}}^2 +
+    .. math::
+
+        \sigma_{\mathrm{tot}} = \sqrt{\sigma_{\mathrm{bkg}}^2 +
         \left(\frac{I}{g_{\mathrm{eff}}}\right)
         \left(\frac{\sigma_{\mathrm{bkg}}^2}
         {\mathrm{RMS_{\mathrm{median}}^2}}\right)}
@@ -138,29 +146,34 @@ def calc_total_error(data, bkg_error, effective_gain):
     has_unit = [hasattr(x, 'unit') for x in inputs]
     use_units = all(has_unit)
     if any(has_unit) and not use_units:
-        raise ValueError('If any of data, bkg_error, or effective_gain has '
-                         'units, then they all must all have units.')
+        msg = ('If any of data, bkg_error, or effective_gain has units, '
+               'then they all must all have units.')
+        raise ValueError(msg)
 
     if use_units:
         if data.unit != bkg_error.unit:
-            raise ValueError('data and bkg_error must have the same units.')
+            msg = 'data and bkg_error must have the same units'
+            raise ValueError(msg)
 
         count_units = [u.electron, u.photon]
         datagain_unit = data.unit * effective_gain.unit
         if datagain_unit not in count_units:
-            raise u.UnitsError('(data * effective_gain) has units of '
-                               f'{datagain_unit}, but it must have count '
-                               'units (e.g., u.electron or u.photon).')
+            msg = ('(data * effective_gain) has units of '
+                   '{datagain_unit}, but it must have count units '
+                   '(e.g., u.electron or u.photon).')
+            raise u.UnitsError(msg)
 
-    if not isiterable(effective_gain):
+    if not np.iterable(effective_gain):
         effective_gain = np.zeros(data.shape) + effective_gain
     else:
         effective_gain = np.asanyarray(effective_gain)
         if effective_gain.shape != data.shape:
-            raise ValueError('If input effective_gain is 2D, then it must '
-                             'have the same shape as the input data.')
+            msg = ('If input effective_gain is 2D, then it must have '
+                   'the same shape as the input data.')
+            raise ValueError(msg)
     if np.any(effective_gain < 0):
-        raise ValueError('effective_gain must be non-zero everywhere.')
+        msg = 'effective_gain must be non-zero everywhere'
+        raise ValueError(msg)
 
     if use_units:
         unit = data.unit

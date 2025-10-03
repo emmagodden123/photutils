@@ -13,12 +13,12 @@ Terminology
 -----------
 
 Different astronomy subfields use the terms "PSF", "PRF", or related
-terms somewhat differently, especially when colloquial usage is taken
-into account. The `photutils.psf` package aims to be internally
+terms in slightly varied ways, especially when colloquial usage is
+taken into account. The `photutils.psf` package aims to be internally
 consistent, following the definitions described here.
 
 We take the Point Spread Function (PSF), or instrumental Point
-Spread Function (iPSF) to be the infinite-resolution and
+Spread Function (iPSF), to be the infinite-resolution and
 infinite-signal-to-noise flux distribution from a point source on
 the detector, after passing through optics, dust, atmosphere, etc.
 By contrast, the function describing the responsivity variations
@@ -36,7 +36,7 @@ PSF (e.g., see the `Spitzer Space Telescope MOPEX documentation
 /mopex/mopexusersguide/89/>`_).
 
 In many cases the PSF/PRF/ePSF distinction is unimportant, and the
-PSF/PRF/ePSF are simply called the "PSF" model, but the distinction
+PSF/PRF/ePSF is simply called the "PSF" model. However, the distinction
 can be critical when dealing carefully with undersampled data or
 detectors with significant intra-pixel sensitivity variations. For a
 more detailed description of this formalism, see `Anderson & King 2000
@@ -79,9 +79,9 @@ of the DAOPHOT algorithm described by Stetson in his `seminal paper
 <https://ui.adsabs.harvard.edu/abs/1987PASP...99..191S/abstract>`_ for
 crowded-field stellar photometry.
 
-The star-finding step is controlled by the ``finder``
+The source-finding step is controlled by the ``finder``
 keyword, where one inputs a callable function or class
-instance. Typically, this would be one of the star-detection
+instance. Typically, this would be one of the source-detection
 classes implemented in the `photutils.detection`
 subpackage, e.g., `~photutils.detection.DAOStarFinder`,
 `~photutils.detection.IRAFStarFinder`, or
@@ -90,15 +90,15 @@ subpackage, e.g., `~photutils.detection.DAOStarFinder`,
 After finding sources, one can optionally apply a clustering algorithm
 to group overlapping sources using the ``grouper`` keyword. Usually,
 groups are formed by a distance criterion, which is the case of the
-grouping algorithm proposed by Stetson. Stars that grouped are fit
+grouping algorithm proposed by Stetson. Sources that grouped are fit
 simultaneously. The reason behind the construction of groups and not
-fitting all stars simultaneously is illustrated as follows: imagine
-that one would like to fit 300 stars and the model for each star has
-three parameters to be fitted. If one constructs a single model to fit
-the 300 stars simultaneously, then the optimization algorithm will
-have to search for the solution in a 900-dimensional space, which
+fitting all sources simultaneously is illustrated as follows: imagine
+that one would like to fit 300 sources and the model for each source
+has three parameters to be fitted. If one constructs a single model to
+fit the 300 sources simultaneously, then the optimization algorithm
+will have to search for the solution in a 900-dimensional space, which
 is computationally expensive and error-prone. Having smaller groups
-of stars effectively reduces the dimension of the parameter space,
+of sources effectively reduces the dimension of the parameter space,
 which facilitates the optimization process. For more details see
 :ref:`psf-grouping`.
 
@@ -113,14 +113,14 @@ The next step is to fit the sources and/or groups. This
 task is performed using an astropy fitter, for example
 `~astropy.modeling.fitting.TRFLSQFitter`, input via the ``fitter``
 keyword. The shape of the region to be fitted can be configured using
-the ``fit_shape`` parameter. In general, ``fit_shape`` should be set
-to a small size (e.g., (5, 5)) that covers the central star region
-with the highest flux signal-to-noise. The initial positions are
-derived from the ``finder`` algorithm. The initial flux values for the
-fit are derived from measuring the flux in a circular aperture with
-radius ``aperture_radius``. The initial positions and fluxes can be
-alternatively input in a table via the ``init_params`` keyword when
-calling the class.
+the ``fit_shape`` parameter. In general, ``fit_shape`` should be set to
+a small size (e.g., (5, 5)) that covers the central part of the source
+with the highest flux signal-to-noise. The initial positions are derived
+from the ``finder`` algorithm. The initial flux values for the fit are
+derived from measuring the flux in a circular aperture with radius
+``aperture_radius``. Alternatively, the initial positions and fluxes can
+be input in a table via the ``init_params`` keyword when calling the
+class.
 
 After sources are fitted, a model image of the fit
 sources or a residual image can be generated using the
@@ -160,24 +160,23 @@ encapsulate changes in the PSF across the detector, e.g., due to optical
 aberrations.
 
 For image-based PSF models, the PSF model is typically derived from
-observed data or from detailed optical modeling. The PSF model can
-be a single PSF model for the entire image or a grid of PSF models
-at fiducial detector positions. The PSF model image is also often
-oversampled to increase the accuracy of the PSF model.
+observed data or from detailed optical modeling. The PSF model can be
+a single PSF model for the entire image or a grid of PSF models at
+fiducial detector positions. Image-based PSF models are also often
+oversampled with respect to the pixel grid to increase the accuracy of
+fitting the PSF model.
 
-The observatory that obtained the data may provide tools for
-creating PSF models for their data or an empirical library of
-PSF models based on previous observations. For example, the
-`Hubble Space Telescope <https://www.stsci.edu/hst>`_ provides
-both libraries of empirical PSF models (e.g., `WFC3 PSF Search
-<https://www.stsci.edu/hst/instrumentation/wfc3/data-analysis/psf/psf-se
-arch>`_) and the `TinyTim
-<https://www.stsci.edu/hst/instrumentation/focus-and-pointing/focus/tiny
--tim-hst-psf-modeling>`_ software for creating PSF models. Similarly,
-the `James Webb Space Telescope <https://www.stsci.edu/jwst>`_ provides
-the `WebbPSF <https://webbpsf.readthedocs.io/>`_ Python software for
-creating PSF models. In particular, WebbPSF outputs gridded PSF models
-directly as Photutils `~photutils.psf.GriddedPSFModel` instances.
+The observatory that obtained the data may provide tools for creating
+PSF models for their data or an empirical library of PSF models
+based on previous observations. For example, the `Hubble Space
+Telescope <https://www.stsci.edu/hst>`_ provides libraries of
+empirical PSF models for ACS and WFC3 (e.g., `WFC3 PSF Search
+<https://www.stsci.edu/hst/instrumentation/wfc3/data-analysis/psf/psf-search>`_).
+Similarly, the `James Webb Space Telescope <https://www.stsci.edu/jwst>`_
+and the `Nancy Grace Roman Space Telescope <https://www.stsci.edu/roman>`_
+provide the `STPSF <https://stpsf.readthedocs.io/>`_ Python software
+for creating PSF models. In particular, WebbPSF outputs gridded PSF
+models directly as Photutils `~photutils.psf.GriddedPSFModel` instances.
 
 If you cannot obtain a PSF model from an empirical library or
 observatory-provided tool, Photutils provides tools for creating an
@@ -208,11 +207,14 @@ You can also create your own custom PSF model using the Astropy modeling
 framework. The PSF model must be a 2D model that is a subclass of
 `~astropy.modeling.Fittable2DModel`. It must have parameters called
 ``x_0``, ``y_0``, and ``flux``, specifying the central position and
-total integrated flux, and it should be normalized to unit flux.
+total integrated flux.
 
 
 Analytic PSF Models
 ^^^^^^^^^^^^^^^^^^^
+
+The `photutils.psf` subpackage provides the following analytic PSF
+models:
 
 - `~photutils.psf.GaussianPSF`: a general 2D Gaussian PSF model
   parameterized in terms of the position, total flux, and full width
@@ -249,8 +251,8 @@ function over the pixel areas.
 If one needs a custom PRF model based on an analytical PSF model, an
 efficient option is to first discretize the model on a grid using
 :func:`~astropy.convolution.discretize_model` with the ``'oversample'``
-or ``'integrate'`` ``mode``. The resulting 2D image can then be used as
-the input to ``FittableImageModel`` (see :ref:`psf-image_models` below)
+or ``'integrate'`` mode. The resulting 2D image can then be used as the
+input to `~photutils.psf.ImagePSF` (see :ref:`psf-image_models` below)
 to create an ePSF model.
 
 Note that the non-circular Gaussian and Moffat models above have
@@ -261,12 +263,13 @@ process). The user can choose to also vary these parameters by setting
 the ``fixed`` attribute on the model parameter to `False`.
 
 Photutils also provides a convenience function called
-:func:`~photutils.psf.make_psf_model` that creates a PSF model from
-an Astropy fittable 2D model. However, it is recommended that one use
-the PSF models provided by `photutils.psf` (if possible) as they are
-optimized for PSF photometry. If a custom PSF model is needed, one can
-be created using the Astropy modeling framework that will provide better
-performance than using :func:`~photutils.psf.make_psf_model`.
+:func:`~photutils.psf.make_psf_model` that creates a PSF model from an
+Astropy fittable 2D model. However, it is recommended that one use the
+PSF models provided by `photutils.psf` as they are optimized for PSF
+photometry. If a custom PSF model is needed, one can be created using
+the Astropy modeling framework that will provide better performance than
+using :func:`~photutils.psf.make_psf_model`.
+
 
 .. _psf-image_models:
 
@@ -338,11 +341,11 @@ Let's plot the image:
     plt.colorbar()
 
 
-Fitting multiple stars
-^^^^^^^^^^^^^^^^^^^^^^
+Fitting multiple sources
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 Now let's use `~photutils.psf.PSFPhotometry` to perform PSF photometry
-on the stars in this image. Note that the input image must be
+on the sources in this image. Note that the input image must be
 background-subtracted prior to using the photometry classes. See
 :ref:`background` for tools to subtract a global background from an
 image. This step is not needed for our synthetic image because it does
@@ -351,7 +354,7 @@ not include background.
 We'll use the `~photutils.detection.DAOStarFinder` class for
 source detection. We'll estimate the initial fluxes of each
 source using a circular aperture with a radius 4 pixels. The
-central 5x5 pixel region of each star will be fit using an
+central 5x5 pixel region of each source will be fit using an
 `~photutils.psf.CircularGaussianPRF` PSF model. First, let's create an
 instance of the `~photutils.psf.PSFPhotometry` class::
 
@@ -414,7 +417,7 @@ print the source ID along with the fit x, y, and flux values::
 
 Let's create the residual image::
 
-    >>> resid = psfphot.make_residual_image(data, (9, 9))
+    >>> resid = psfphot.make_residual_image(data)
 
 and plot it:
 
@@ -448,7 +451,7 @@ and plot it:
                             aperture_radius=4)
     phot = psfphot(data, error=error)
 
-    resid = psfphot.make_residual_image(data, (9, 9))
+    resid = psfphot.make_residual_image(data)
 
     fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
     norm = simple_norm(data, 'sqrt', percent=99)
@@ -490,33 +493,13 @@ astropy table)::
       9    5.5858   89.8664    0.5741 ... 54.3786 505.6093 -6.7595     -2.1188
      10   71.8303   90.5624    0.6038 ... 73.5747 639.9299 -7.0153     -2.4516
 
-The ``fit_info`` attribute contains a dictionary with detailed
-information returned from the ``fitter`` for each source::
-
-    >>> psfphot.fit_info.keys()
-    dict_keys(['fit_infos', 'fit_error_indices'])
-
-The ``fit_error_indices`` key contains the indices of sources for which
-the fit reported warnings or errors.
-
-As an example, let's print the covariance matrix of the fit parameters
-for the first source (note that not all astropy fitters will return a
-covariance matrix):
-
-.. doctest-skip::
-
-    >>> psfphot.fit_info['fit_infos'][0]['param_cov']  # doctest: +FLOAT_CMP
-    array([[ 7.27034774e-01,  8.86845334e-04,  3.98593038e-03],
-           [ 8.86845334e-04,  2.92871525e-06, -6.36805464e-07],
-           [ 3.98593038e-03, -6.36805464e-07,  4.29520185e-05]])
-
 
 Fitting a single source
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 In some cases, one may want to fit only a single source (or few sources)
-in an image. We can do that by defining a table of the sources that
-we want to fit. For this example, let's fit the single star at ``(x,
+in an image. We can do that by defining a table of the sources that we
+want to fit. For this example, let's fit the single source at ``(x,
 y) = (63, 49)``. We first define a table with this position and then
 pass that table into the ``init_params`` keyword when calling the PSF
 photometry class on the data::
@@ -542,7 +525,7 @@ The output table contains only the fit results for the input source::
       1 63.2340 48.6408 563.3426
 
 Finally, let's show the residual image. The red circular aperture shows
-the location of the star that was fit and subtracted.
+the location of the source that was fit and subtracted.
 
 .. plot::
 
@@ -580,7 +563,7 @@ the location of the star that was fit and subtracted.
     init_params['y'] = [49]
     phot = psfphot(data, error=error, init_params=init_params)
 
-    resid = psfphot.make_residual_image(data, (9, 9))
+    resid = psfphot.make_residual_image(data)
     aper = CircularAperture(zip(phot['x_fit'], phot['y_fit']), r=4)
 
     fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
@@ -664,23 +647,23 @@ parameters. Here we constrain the flux to be greater than or equal to
 
     >>> psf_model3 = CircularGaussianPRF(flux=1, fwhm=2.7)
     >>> psf_model3.flux.bounds = (0, None)
-    >>> psf_model3.bounds
-    {'flux': (0.0, None), 'x_0': (None, None), 'y_0': (None, None), 'fwhm': (None, None)}
+    >>> psf_model3.bounds  # doctest: +FLOAT_CMP
+    {'flux': (0.0, None), 'x_0': (None, None), 'y_0': (None, None), 'fwhm': (0.0, None)}
 
 The model parameter ``bounds`` can also be set using the ``min`` and/or
 ``max`` attributes. Here we set the minimum flux to be 0::
 
     >>> psf_model3.flux.min = 0
-    >>> psf_model3.bounds
-    {'flux': (0.0, None), 'x_0': (None, None), 'y_0': (None, None), 'fwhm': (None, None)}
+    >>> psf_model3.bounds  # doctest: +FLOAT_CMP
+    {'flux': (0.0, None), 'x_0': (None, None), 'y_0': (None, None), 'fwhm': (0.0, None)}
 
-For this example, let's constrain the flux value to be between between
+For this example, let's constrain the flux value to be between
 400 and 600::
 
     >>> psf_model3 = CircularGaussianPRF(flux=1, fwhm=2.7)
     >>> psf_model3.flux.bounds = (400, 600)
-    >>> psf_model3.bounds
-    {'flux': (400.0, 600.0), 'x_0': (None, None), 'y_0': (None, None), 'fwhm': (None, None)}
+    >>> psf_model3.bounds  # doctest: +FLOAT_CMP
+    {'flux': (400.0, 600.0), 'x_0': (None, None), 'y_0': (None, None), 'fwhm': (0.0, None)}
 
 
 Source Grouping
@@ -688,7 +671,7 @@ Source Grouping
 
 Source grouping is an optional feature. To turn it on, create a
 `~photutils.psf.SourceGrouper` instance and input it via the ``grouper``
-keyword. Here we'll group stars that are within 20 pixels of each
+keyword. Here we'll group sources that are within 20 pixels of each
 other::
 
     >>> from photutils.psf import SourceGrouper
@@ -698,7 +681,7 @@ other::
     >>> phot = psfphot(data, error=error)
 
 The ``group_id`` column shows that seven groups were identified. The
-stars in each group were simultaneously fit::
+sources in each group were simultaneously fit::
 
     >>> print(phot[('id', 'group_id', 'group_size')])
      id group_id group_size
@@ -714,13 +697,14 @@ stars in each group were simultaneously fit::
       9        6          2
      10        7          1
 
-Care should be taken in defining the star groups. Simultaneously fitting
-very large star groups is computationally expensive and error-prone.
-Internally, source grouping requires the creation of a compound Astropy
-model. Due to the way compound Astropy models are currently constructed,
-large groups also require excessively large amounts of memory; this will
-hopefully be fixed in a future Astropy version. A warning will be raised
-if the number of sources in a group exceeds 25.
+Care should be taken in defining the source groups. Simultaneously
+fitting very large source groups is computationally expensive and
+error-prone. Internally, source grouping requires the creation of a
+compound Astropy model. Due to the way compound Astropy models are
+currently constructed, large groups also require excessively large
+amounts of memory; this will hopefully be fixed in a future Astropy
+version. A warning will be raised if the number of sources in a group
+exceeds a threshold defined by the ``group_warning_threshold`` keyword.
 
 
 Local Background Subtraction
@@ -767,13 +751,14 @@ Iterative PSF Photometry
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
 Now let's use the `~photutils.psf.IterativePSFPhotometry` class to
-iteratively fit the stars in the image. This class is useful for crowded
-fields where faint stars are very close to bright stars. The faint stars
-may not be detected until after the bright stars are subtracted.
+iteratively fit the sources in the image. This class is useful for
+crowded fields where faint sources are very close to bright sources. The
+faint sources may not be detected until after the bright sources are
+subtracted.
 
-For this simple example, let's input a table of three stars for the
+For this simple example, let's input a table of three sources for the
 first fit iteration. Subsequent iterations will use the ``finder`` to
-find additional stars::
+find additional sources::
 
     >>> from photutils.background import LocalBackground, MMMBackground
     >>> from photutils.psf import IterativePSFPhotometry

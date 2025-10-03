@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for computing and fitting harmonic functions.
+Define tools for computing and fitting harmonic functions.
 """
 
 import numpy as np
@@ -17,7 +17,8 @@ def _least_squares_fit(optimize_func, parameters):
     solution = leastsq(optimize_func, parameters, full_output=True)
 
     if solution[4] > 4:
-        raise RuntimeError('Error in least squares fit: ' + solution[3])
+        msg = f'Error in least squares fit: {solution[3]}'
+        raise RuntimeError(msg)
 
     # return coefficients and covariance matrix
     return (solution[0], solution[1])
@@ -104,6 +105,7 @@ def fit_upper_harmonic(phi, intensities, order):
     The harmonic function that is fit is:
 
     .. math::
+
         y(phi, order) = y0 + An*\sin(order*phi) + Bn*\cos(order*phi)
 
     Parameters

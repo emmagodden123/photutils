@@ -21,22 +21,22 @@ Photutils provides several apertures defined in pixel or sky
 coordinates.  The aperture classes that are defined in pixel
 coordinates are:
 
-    * `~photutils.aperture.CircularAperture`
-    * `~photutils.aperture.CircularAnnulus`
-    * `~photutils.aperture.EllipticalAperture`
-    * `~photutils.aperture.EllipticalAnnulus`
-    * `~photutils.aperture.RectangularAperture`
-    * `~photutils.aperture.RectangularAnnulus`
+* `~photutils.aperture.CircularAperture`
+* `~photutils.aperture.CircularAnnulus`
+* `~photutils.aperture.EllipticalAperture`
+* `~photutils.aperture.EllipticalAnnulus`
+* `~photutils.aperture.RectangularAperture`
+* `~photutils.aperture.RectangularAnnulus`
 
 Each of these classes has a corresponding variant defined in sky
 coordinates:
 
-    * `~photutils.aperture.SkyCircularAperture`
-    * `~photutils.aperture.SkyCircularAnnulus`
-    * `~photutils.aperture.SkyEllipticalAperture`
-    * `~photutils.aperture.SkyEllipticalAnnulus`
-    * `~photutils.aperture.SkyRectangularAperture`
-    * `~photutils.aperture.SkyRectangularAnnulus`
+* `~photutils.aperture.SkyCircularAperture`
+* `~photutils.aperture.SkyCircularAnnulus`
+* `~photutils.aperture.SkyEllipticalAperture`
+* `~photutils.aperture.SkyEllipticalAnnulus`
+* `~photutils.aperture.SkyRectangularAperture`
+* `~photutils.aperture.SkyRectangularAnnulus`
 
 To perform aperture photometry with sky-based apertures, one will need
 to specify a WCS transformation.
@@ -155,7 +155,6 @@ here as an array of all ones::
     >>> phot_table['aperture_sum'].info.format = '%.8g'  # for consistent table output
     >>> print(phot_table)
      id xcenter ycenter aperture_sum
-          pix     pix
     --- ------- ------- ------------
       1    30.0    30.0    28.274334
       2    40.0    40.0    28.274334
@@ -194,7 +193,6 @@ by a factor of 5 (``subpixels=5``) in each dimension::
     ...                                  subpixels=5)
     >>> print(phot_table)  # doctest: +SKIP
      id xcenter ycenter aperture_sum
-          pix     pix
     --- ------- ------- ------------
       1    30.0    30.0        27.96
       2    40.0    40.0        27.96
@@ -233,7 +231,6 @@ Suppose that we wish to use three circular apertures, with radii of 3,
     ...     phot_table[col].info.format = '%.8g'  # for consistent table output
     >>> print(phot_table)
      id xcenter ycenter aperture_sum_0 aperture_sum_1 aperture_sum_2
-          pix     pix
     --- ------- ------- -------------- -------------- --------------
       1      30      30      28.274334      50.265482      78.539816
       2      40      40      28.274334      50.265482      78.539816
@@ -256,7 +253,6 @@ specify ``a``, ``b``, and ``theta``::
     ...     phot_table[col].info.format = '%.8g'  # for consistent table output
     >>> print(phot_table)
      id xcenter ycenter aperture_sum
-          pix     pix
     --- ------- ------- ------------
       1      30      30     47.12389
       2      40      40     47.12389
@@ -274,7 +270,6 @@ objects, each with identical positions::
     ...     phot_table[col].info.format = '%.8g'  # for consistent table output
     >>> print(phot_table)
      id xcenter ycenter aperture_sum_0 aperture_sum_1 aperture_sum_2
-          pix     pix
     --- ------- ------- -------------- -------------- --------------
       1      30      30       47.12389      75.398224      109.95574
       2      40      40       47.12389      75.398224      109.95574
@@ -488,7 +483,6 @@ the photometry in the circular aperture (in the next example, we'll use
     ...     phot_table[col].info.format = '%.8g'  # for consistent table output
     >>> print(phot_table)
      id xcenter ycenter aperture_sum
-          pix     pix
     --- ------- ------- ------------
       1   145.1   168.3    1128.1245
       2    84.5   224.1      735.739
@@ -534,7 +528,6 @@ Finally, let's add these as columns to the photometry table::
     ...     phot_table[col].info.format = '%.8g'  # for consistent table output
     >>> print(phot_table)
      id xcenter ycenter aperture_sum total_bkg aperture_sum_bkgsub
-          pix     pix
     --- ------- ------- ------------ --------- -------------------
       1   145.1   168.3    1128.1245 392.23708           735.88739
       2    84.5   224.1      735.739  403.2968           332.44219
@@ -611,15 +604,14 @@ pixel value and saved it in the array ``error``::
     ...     phot_table[col].info.format = '%.8g'  # for consistent table output
     >>> print(phot_table)
      id xcenter ycenter aperture_sum aperture_sum_err
-          pix     pix
     --- ------- ------- ------------ ----------------
       1      30      30    28.274334       0.53173616
       2      40      40    28.274334       0.53173616
 
 ``'aperture_sum_err'`` values are given by:
 
-    .. math:: \Delta F = \sqrt{\sum_{i \in A}
-              \sigma_{\mathrm{tot}, i}^2}
+.. math:: \Delta F = \sqrt{\sum_{i \in A}
+          \sigma_{\mathrm{tot}, i}^2}
 
 where :math:`A` are the non-masked pixels in the aperture, and
 :math:`\sigma_{\mathrm{tot}, i}` is the input ``error`` array.
@@ -888,27 +880,26 @@ extend functionality: a new type of aperture photometry simply
 requires the definition of a new `~photutils.aperture.Aperture`
 subclass.
 
-All `~photutils.aperture.PixelAperture` subclasses must define a
-``bounding_boxes`` property and ``to_mask()`` and ``plot()`` methods.
-They may also optionally define an ``area`` property.  All
+All `~photutils.aperture.PixelAperture` subclasses must define
+a ``bounding_boxes`` property and ``to_mask()`` and ``plot()``
+methods. They may also optionally define an ``area`` property. All
 `~photutils.aperture.SkyAperture` subclasses must only implement a
 ``to_pixel()`` method.
 
-    * ``bounding_boxes``:  The minimal bounding box for the aperture.
-      If the aperture is scalar, then a single
-      `~photutils.aperture.BoundingBox` is returned.  Otherwise, a list
-      of `~photutils.aperture.BoundingBox` is returned.
+* ``bounding_boxes``:  The minimal bounding box for the aperture.
+  If the aperture is scalar, then a single
+  `~photutils.aperture.BoundingBox` is returned. Otherwise, a list of
+  `~photutils.aperture.BoundingBox` is returned.
 
-    * ``area``: An optional property defining the exact analytical
-      area (in pixels**2) of the aperture.
+* ``area``: An optional property defining the exact analytical
+  area (in pixels**2) of the aperture.
 
-    * ``to_mask()``: Return a mask for the aperture.  If the aperture
-      is scalar, then a single `~photutils.aperture.ApertureMask` is
-      returned.  Otherwise, a list of
-      `~photutils.aperture.ApertureMask` is returned.
+* ``to_mask()``: Return a mask for the aperture. If the aperture is
+  scalar, then a single `~photutils.aperture.ApertureMask` is returned.
+  Otherwise, a list of `~photutils.aperture.ApertureMask` is returned.
 
-    * ``plot()``: A method to plot the aperture on a
-      `matplotlib.axes.Axes` instance.
+* ``plot()``: A method to plot the aperture on a `matplotlib.axes.Axes`
+  instance.
 
 
 API Reference

@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for loading example datasets, from both
-within photutils and remote servers.
+Provide tools for loading example datasets, from both within photutils
+and remote servers.
 """
 
 from urllib.error import HTTPError, URLError
@@ -10,8 +10,14 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.utils.data import download_file, get_pkg_data_filename
 
-__all__ = ['get_path', 'load_spitzer_image', 'load_spitzer_catalog',
-           'load_irac_psf', 'load_star_image', 'load_simulated_hst_star_image']
+__all__ = [
+    'get_path',
+    'load_irac_psf',
+    'load_simulated_hst_star_image',
+    'load_spitzer_catalog',
+    'load_spitzer_image',
+    'load_star_image',
+]
 
 
 def get_path(filename, location='local', cache=True, show_progress=False):
@@ -60,7 +66,8 @@ def get_path(filename, location='local', cache=True, show_progress=False):
         path = download_file(datasets_url, cache=cache,
                              show_progress=show_progress)
     else:
-        raise ValueError(f'Invalid location: {location}')
+        msg = f'Invalid location: {location}'
+        raise ValueError(msg)
 
     return path
 
@@ -159,10 +166,10 @@ def load_irac_psf(channel, show_progress=False):  # pragma: no cover
     channel : int (1-4)
         The IRAC channel number:
 
-          * Channel 1:  3.6 microns
-          * Channel 2:  4.5 microns
-          * Channel 3:  5.8 microns
-          * Channel 4:  8.0 microns
+        * Channel 1:  3.6 microns
+        * Channel 2:  4.5 microns
+        * Channel 3:  5.8 microns
+        * Channel 4:  8.0 microns
 
     show_progress : bool, optional
         Whether to display a progress bar during the download (default
@@ -207,7 +214,8 @@ def load_irac_psf(channel, show_progress=False):  # pragma: no cover
     """
     channel = int(channel)
     if channel < 1 or channel > 4:
-        raise ValueError('channel must be 1, 2, 3, or 4')
+        msg = 'channel must be 1, 2, 3, or 4'
+        raise ValueError(msg)
 
     filepath = f'irac_ch{channel}_flight.fits'
     path = get_path(filepath, location='remote', show_progress=show_progress)

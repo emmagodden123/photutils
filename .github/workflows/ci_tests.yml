@@ -31,8 +31,8 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python: '3.10'
-            tox_env: 'py310-test-alldeps'
+            python: '3.11'
+            tox_env: 'py311-test-oldestdeps'
             allow_failure: false
             prefix: ''
 
@@ -44,57 +44,59 @@ jobs:
 
           - os: ubuntu-latest
             python: '3.12'
+            tox_env: 'py312-test-alldeps'
+            allow_failure: false
+            prefix: ''
+
+          - os: macos-latest
+            python: '3.13'
+            tox_env: 'py313-test-alldeps'
+            allow_failure: false
+            prefix: ''
+
+          - os: windows-latest
+            python: '3.13'
+            tox_env: 'py313-test-alldeps'
+            allow_failure: false
+            prefix: ''
+
+          - os: ubuntu-latest
+            python: '3.13'
             tox_env: 'py312-test-alldeps-cov'
             toxposargs: --remote-data=any
             allow_failure: false
             prefix: ''
 
-          - os: macos-latest
-            python: '3.12'
-            tox_env: 'py312-test-alldeps'
+          # cannot use alldeps: rasterio does not have a arm64 wheel
+          - os: ubuntu-24.04-arm
+            python: '3.13'
+            tox_env: 'py313-test'
             allow_failure: false
             prefix: ''
 
-          - os: macos-14
-            python: '3.12'
-            tox_env: 'py312-test-alldeps'
-            allow_failure: false
-            prefix: 'M1'
-
-          - os: windows-latest
-            python: '3.12'
-            tox_env: 'py312-test-alldeps'
-            allow_failure: false
-            prefix: ''
-
+          # test without all dependencies
           - os: ubuntu-latest
-            python: '3.12'
-            tox_env: 'py312-test'
+            python: '3.13'
+            tox_env: 'py313-test'
             toxposargs: --remote-data=any
             allow_failure: false
             prefix: ''
 
           - os: ubuntu-latest
-            python: '3.12'
+            python: '3.13'
             tox_env: 'codestyle'
             allow_failure: false
             prefix: ''
 
           - os: ubuntu-latest
-            python: '3.12'
+            python: '3.13'
             tox_env: 'pep517'
             allow_failure: false
             prefix: ''
 
           - os: ubuntu-latest
-            python: '3.12'
+            python: '3.13'
             tox_env: 'bandit'
-            allow_failure: false
-            prefix: ''
-
-          - os: ubuntu-latest
-            python: '3.10'
-            tox_env: 'py310-test-oldestdeps'
             allow_failure: false
             prefix: ''
 
@@ -107,11 +109,12 @@ jobs:
 
     steps:
     - name: Check out repository
-      uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938  # v4.2.0
+      uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       with:
+        persist-credentials: false
         fetch-depth: 0
     - name: Set up Python ${{ matrix.python }}
-      uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3  # v5.2.0
+      uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
       with:
         python-version: ${{ matrix.python }}
         allow-prereleases: true
@@ -124,10 +127,10 @@ jobs:
         python -c "import setuptools; print(f'setuptools {setuptools.__version__}')"
         python -c "import tox; print(f'tox {tox.__version__}')"
     - name: Run tests
-      run: tox -e ${{ matrix.tox_env }} -- ${{ matrix.toxposargs }}
+      run: python -m tox -e ${{ matrix.tox_env }} -- -n=2 ${{ matrix.toxposargs }}
     - name: Upload coverage to codecov
       if: ${{ contains(matrix.tox_env, '-cov') }}
-      uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673  # v4.5.0
+      uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7  # v5.5.1
       with:
         files: ./coverage.xml
         verbose: true

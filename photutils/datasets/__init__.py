@@ -1,13 +1,16 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This subpackage contains tools for making or loading datasets for
-examples and tests.
+Subpackage containing tools for loading datasets or making simulated
+data.
+
+These tools are typically used in examples, tutorials, and tests but can
+also be used for general data analysis or exploration.
 """
 
 from .images import *  # noqa: F401, F403
 from .load import *  # noqa: F401, F403
+from .model_params import *  # noqa: F401, F403
 from .noise import *  # noqa: F401, F403
-from .sources import *  # noqa: F401, F403
 from .wcs import *  # noqa: F401, F403
 
 # prevent circular imports

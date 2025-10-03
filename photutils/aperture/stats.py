@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for calculating the properties of sources
-defined by an Aperture.
+Define tools for calculating the properties of sources defined by an
+Aperture.
 """
 
 import functools
@@ -133,24 +133,24 @@ class ApertureStats:
         "center" aperture mask method. Not all options are available for
         all aperture types. The following methods are available:
 
-          * ``'exact'`` (default):
-            The exact fractional overlap of the aperture and each pixel
-            is calculated. The aperture weights will contain values
-            between 0 and 1.
+        * ``'exact'`` (default):
+          The exact fractional overlap of the aperture and each pixel is
+          calculated. The aperture weights will contain values between 0
+          and 1.
 
-          * ``'center'``:
-            A pixel is considered to be entirely in or out of the
-            aperture depending on whether its center is in or out of the
-            aperture. The aperture weights will contain values only of 0
-            (out) and 1 (in).
+        * ``'center'``:
+          A pixel is considered to be entirely in or out of the aperture
+          depending on whether its center is in or out of the aperture.
+          The aperture weights will contain values only of 0 (out) and 1
+          (in).
 
-          * ``'subpixel'``:
-            A pixel is divided into subpixels (see the ``subpixels``
-            keyword), each of which are considered to be entirely in
-            or out of the aperture depending on whether its center is
-            in or out of the aperture. If ``subpixels=1``, this method
-            is equivalent to ``'center'``. The aperture weights will
-            contain values between 0 and 1.
+        * ``'subpixel'``:
+          A pixel is divided into subpixels (see the ``subpixels``
+          keyword), each of which are considered to be entirely in or
+          out of the aperture depending on whether its center is in
+          or out of the aperture. If ``subpixels=1``, this method is
+          equivalent to ``'center'``. The aperture weights will contain
+          values between 0 and 1.
 
     subpixels : int, optional
         For the ``'subpixel'`` method, resample pixels by this factor
@@ -178,6 +178,15 @@ class ApertureStats:
 
     `~regions.Region` objects are converted to `Aperture` objects using
     the :func:`region_to_aperture` function.
+
+    The returned statistics are measured for the pixels within the
+    input aperture at its input position. This class does not change
+    the position of the input aperture. This class returns the centroid
+    value of the pixels within the input aperture, but the input
+    aperture is not recentered at the measured centroid position
+    when making the measurements. If desired, you can create a new
+    `Aperture` object using the measured centroid and then re-run
+    `~photutils.aperture.ApertureStats`.
 
     Most source properties are calculated using the "center"
     aperture-mask method, which gives aperture weights of 0 or 1. This
@@ -248,7 +257,8 @@ class ApertureStats:
         aperture_meta = _aperture_metadata(aperture)  # use input aperture
 
         if isinstance(aperture, SkyAperture) and wcs is None:
-            raise ValueError('A wcs is required when using a SkyAperture')
+            msg = 'A wcs is required when using a SkyAperture'
+            raise ValueError(msg)
 
         # convert region to aperture if necessary
         if not isinstance(aperture, Aperture):
@@ -260,7 +270,8 @@ class ApertureStats:
         self._wcs = wcs
 
         if sigma_clip is not None and not isinstance(sigma_clip, SigmaClip):
-            raise TypeError('sigma_clip must be a SigmaClip instance')
+            msg = 'sigma_clip must be a SigmaClip instance'
+            raise TypeError(msg)
         self.sigma_clip = sigma_clip
 
         self.sum_method = sum_method
@@ -270,17 +281,20 @@ class ApertureStats:
         if local_bkg is not None:
             local_bkg = np.atleast_1d(local_bkg)
             if local_bkg.ndim != 1:
-                raise ValueError('local_bkg must be a 1D array')
+                msg = 'local_bkg must be a 1D array'
+                raise ValueError(msg)
 
             n_local_bkg = len(local_bkg)
             if n_local_bkg not in (1, self.n_apertures):
-                raise ValueError('local_bkg must be scalar or have the same '
-                                 'length as the input aperture')
+                msg = ('local_bkg must be scalar or have the same length '
+                       'as the input aperture')
+                raise ValueError(msg)
             local_bkg = np.broadcast_to(local_bkg, self.n_apertures)
 
             if np.any(~np.isfinite(local_bkg)):
-                raise ValueError('local_bkg must not contain any non-finite '
-                                 '(e.g., inf or NaN) values')
+                msg = ('local_bkg must not contain any non-finite '
+                       '(e.g., inf or NaN) values')
+                raise ValueError(msg)
             self._local_bkg = local_bkg  # always an iterable
 
         self._ids = np.arange(self.n_apertures) + 1
@@ -322,7 +336,8 @@ class ApertureStats:
             aper_types = Aperture
 
         if not isinstance(aperture, aper_types):
-            raise TypeError('aperture must be an Aperture or Region object')
+            msg = 'aperture must be an Aperture or Region object'
+            raise TypeError(msg)
         return aperture
 
     def _validate_array(self, array, name, ndim=2, shape=True):
@@ -331,9 +346,11 @@ class ApertureStats:
         if array is not None:
             array = np.asanyarray(array)
             if array.ndim != ndim:
-                raise ValueError(f'{name} must be a {ndim}D array.')
+                msg = f'{name} must be a {ndim}D array'
+                raise ValueError(msg)
             if shape and array.shape != self._data.shape:
-                raise ValueError(f'data and {name} must have the same shape.')
+                msg = f'data and {name} must have the same shape'
+                raise ValueError(msg)
         return array
 
     @property
@@ -359,8 +376,9 @@ class ApertureStats:
 
     def __getitem__(self, index):
         if self.isscalar:
-            raise TypeError(f'A scalar {self.__class__.__name__!r} object '
-                            'cannot be indexed')
+            msg = (f'A scalar {self.__class__.__name__!r} object cannot '
+                   'be indexed')
+            raise TypeError(msg)
 
         newcls = object.__new__(self.__class__)
 
@@ -423,8 +441,8 @@ class ApertureStats:
 
     def __len__(self):
         if self.isscalar:
-            raise TypeError(f'Scalar {self.__class__.__name__!r} object has '
-                            'no len()')
+            msg = f'Scalar {self.__class__.__name__!r} object has no len()'
+            raise TypeError(msg)
         return self.n_apertures
 
     def __iter__(self):
@@ -521,7 +539,8 @@ class ApertureStats:
         """
         for id_num in np.atleast_1d(id_nums):
             if id_num not in self.ids:
-                raise ValueError(f'{id_num} is not a valid source ID number')
+                msg = f'{id_num} is not a valid source ID number'
+                raise ValueError(msg)
 
         sorter = np.argsort(self.id)
         indices = sorter[np.searchsorted(self.id, id_nums, sorter=sorter)]
@@ -547,8 +566,10 @@ class ApertureStats:
         """
         if columns is None:
             table_columns = self.default_columns
+        elif isinstance(columns, str):
+            table_columns = [columns]
         else:
-            table_columns = np.atleast_1d(columns)
+            table_columns = columns
 
         tbl = QTable()
         tbl.meta.update(self.meta)  # keep tbl.meta type
@@ -1235,7 +1256,9 @@ class ApertureStats:
         r"""
         The sum of the unmasked ``data`` values within the aperture.
 
-        .. math:: F = \sum_{i \in A} I_i
+        .. math::
+
+            F = \sum_{i \in A} I_i
 
         where :math:`F` is ``sum``, :math:`I_i` is the
         background-subtracted ``data``, and :math:`A` are the unmasked
@@ -1263,8 +1286,9 @@ class ApertureStats:
         ``sum_err`` is the quadrature sum of the total errors over the
         unmasked pixels within the aperture:
 
-        .. math:: \Delta F = \sqrt{\sum_{i \in A}
-                  \sigma_{\mathrm{tot}, i}^2}
+        .. math::
+
+            \Delta F = \sqrt{\sum_{i \in A} \sigma_{\mathrm{tot}, i}^2}
 
         where :math:`\Delta F` is the `sum_err`,
         :math:`\sigma_{\mathrm{tot, i}}` are the pixel-wise total errors
@@ -1528,7 +1552,7 @@ class ApertureStats:
 
            \mathrm{FWHM} & = 2 \sqrt{2 \ln(2)} \sqrt{0.5 (a^2 + b^2)}
            \\
-                          & = 2 \sqrt{\ln(2) \ (a^2 + b^2)}
+                         & = 2 \sqrt{\ln(2) \ (a^2 + b^2)}
 
         where :math:`a` and :math:`b` are the 1-sigma lengths of the
         semimajor (`semimajor_sigma`) and semiminor (`semiminor_sigma`)
@@ -1550,7 +1574,7 @@ class ApertureStats:
         covar = self._covariance
         orient_radians = 0.5 * np.arctan2(2.0 * covar[:, 0, 1],
                                           (covar[:, 0, 0] - covar[:, 1, 1]))
-        return orient_radians * 180.0 / np.pi * u.deg
+        return np.rad2deg(orient_radians) * u.deg
 
     @lazyproperty
     @as_scalar
@@ -1562,7 +1586,9 @@ class ApertureStats:
         The eccentricity is the fraction of the distance along the
         semimajor axis at which the focus lies.
 
-        .. math:: e = \sqrt{1 - \frac{b^2}{a^2}}
+        .. math::
+
+            e = \sqrt{1 - \frac{b^2}{a^2}}
 
         where :math:`a` and :math:`b` are the lengths of the semimajor
         and semiminor axes, respectively.
@@ -1576,7 +1602,9 @@ class ApertureStats:
         r"""
         The ratio of the lengths of the semimajor and semiminor axes.
 
-        .. math:: \mathrm{elongation} = \frac{a}{b}
+        .. math::
+
+            \mathrm{elongation} = \frac{a}{b}
 
         where :math:`a` and :math:`b` are the lengths of the semimajor
         and semiminor axes, respectively.
@@ -1590,7 +1618,9 @@ class ApertureStats:
         1.0 minus the ratio of the lengths of the semimajor and
         semiminor axes (or 1.0 minus the `elongation`).
 
-        .. math:: \mathrm{ellipticity} = 1 - \frac{b}{a}
+        .. math::
+
+            \mathrm{ellipticity} = 1 - \frac{b}{a}
 
         where :math:`a` and :math:`b` are the lengths of the semimajor
         and semiminor axes, respectively.
@@ -1634,9 +1664,10 @@ class ApertureStats:
 
         The ellipse is defined as
 
-            .. math::
-                cxx (x - \bar{x})^2 + cxy (x - \bar{x}) (y - \bar{y}) +
-                cyy (y - \bar{y})^2 = R^2
+        .. math::
+
+            cxx (x - \bar{x})^2 + cxy (x - \bar{x}) (y - \bar{y}) +
+            cyy (y - \bar{y})^2 = R^2
 
         where :math:`R` is a parameter which scales the ellipse (in
         units of the axes lengths).
@@ -1656,9 +1687,10 @@ class ApertureStats:
 
         The ellipse is defined as
 
-            .. math::
-                cxx (x - \bar{x})^2 + cxy (x - \bar{x}) (y - \bar{y}) +
-                cyy (y - \bar{y})^2 = R^2
+        .. math::
+
+            cxx (x - \bar{x})^2 + cxy (x - \bar{x}) (y - \bar{y}) +
+            cyy (y - \bar{y})^2 = R^2
 
         where :math:`R` is a parameter which scales the ellipse (in
         units of the axes lengths).
@@ -1678,9 +1710,10 @@ class ApertureStats:
 
         The ellipse is defined as
 
-            .. math::
-                cxx (x - \bar{x})^2 + cxy (x - \bar{x}) (y - \bar{y}) +
-                cyy (y - \bar{y})^2 = R^2
+        .. math::
+
+            cxx (x - \bar{x})^2 + cxy (x - \bar{x}) (y - \bar{y}) +
+            cyy (y - \bar{y})^2 = R^2
 
         where :math:`R` is a parameter which scales the ellipse (in
         units of the axes lengths).
@@ -1706,8 +1739,9 @@ class ApertureStats:
         as:
 
         .. math::
+
             G = \frac{1}{\left | \bar{x} \right | n (n - 1)}
-            \sum^{n}_{i} (2i - n - 1) \left | x_i \right |
+                \sum^{n}_{i} (2i - n - 1) \left | x_i \right |
 
         where :math:`\bar{x}` is the mean over pixel values :math:`x_i`
         within the aperture.

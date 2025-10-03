@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module implements the base class and star finder kernel for
-detecting stars in an astronomical image.
+Define the base class and star finder kernel for detecting stars in an
+astronomical image.
 
 Each star-finding class should define a method called ``find_stars``
 that finds stars in an image.
@@ -39,8 +39,9 @@ class StarFinderBase(metaclass=abc.ABCMeta):
         convolved_data : 2D array_like
             The convolved 2D array.
 
-        kernel : `_StarFinderKernel`
-            The convolution kernel.
+        kernel : `_StarFinderKernel` or 2D `~numpy.ndarray`
+            The convolution kernel. ``StarFinder`` inputs the kernel
+            as a 2D array.
 
         threshold : float
             The absolute image value above which to select sources. This
@@ -83,46 +84,29 @@ class StarFinderBase(metaclass=abc.ABCMeta):
             footprint = np.array((xx**2 + yy**2) <= min_separation**2,
                                  dtype=int)
 
-        # pad the convolved data and mask by half the kernel size (or
-        # x/y radius) to allow for detections near the edges
-        if isinstance(kernel, np.ndarray):
-            ypad = (kernel.shape[0] - 1) // 2
-            xpad = (kernel.shape[1] - 1) // 2
+        # define the border exclusion region
+        if exclude_border:
+            if isinstance(kernel, np.ndarray):
+                yborder = (kernel.shape[0] - 1) // 2
+                xborder = (kernel.shape[1] - 1) // 2
+            else:
+                yborder = kernel.yradius
+                xborder = kernel.xradius
+            border_width = (yborder, xborder)
         else:
-            ypad = kernel.yradius
-            xpad = kernel.xradius
-
-        if not exclude_border:
-            pad = ((ypad, ypad), (xpad, xpad))
-            pad_mode = 'constant'
-            convolved_data = np.pad(convolved_data, pad, mode=pad_mode,
-                                    constant_values=0.0)
-            if mask is not None:
-                mask = np.pad(mask, pad, mode=pad_mode, constant_values=False)
+            border_width = None
 
         # find local peaks in the convolved data
         # suppress any NoDetectionsWarning from find_peaks
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=NoDetectionsWarning)
             tbl = find_peaks(convolved_data, threshold, footprint=footprint,
-                             mask=mask)
+                             mask=mask, border_width=border_width)
 
         if tbl is None:
             return None
 
-        if exclude_border:
-            xmax = convolved_data.shape[1] - xpad
-            ymax = convolved_data.shape[0] - ypad
-            mask = ((tbl['x_peak'] > xpad) & (tbl['y_peak'] > ypad)
-                    & (tbl['x_peak'] < xmax) & (tbl['y_peak'] < ymax))
-            tbl = tbl[mask]
-
-        xpos, ypos = tbl['x_peak'], tbl['y_peak']
-        if not exclude_border:
-            xpos -= xpad
-            ypos -= ypad
-
-        return np.transpose((xpos, ypos))
+        return np.transpose((tbl['x_peak'], tbl['y_peak']))
 
     @abc.abstractmethod
     def find_stars(self, data, mask=None):
@@ -146,7 +130,8 @@ class StarFinderBase(metaclass=abc.ABCMeta):
             A table of found stars. If no stars are found then `None` is
             returned.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
 
 class _StarFinderKernel:
@@ -203,14 +188,16 @@ class _StarFinderKernel:
                  normalize_zerosum=True):
 
         if fwhm < 0:
-            raise ValueError('fwhm must be positive.')
+            msg = 'fwhm must be positive'
+            raise ValueError(msg)
 
         if ratio <= 0 or ratio > 1:
-            raise ValueError('ratio must be positive and less or equal '
-                             'than 1.')
+            msg = 'ratio must be positive and less or equal than 1'
+            raise ValueError(msg)
 
         if sigma_radius <= 0:
-            raise ValueError('sigma_radius must be positive.')
+            msg = 'sigma_radius must be positive'
+            raise ValueError(msg)
 
         self.fwhm = fwhm
         self.ratio = ratio
@@ -285,9 +272,11 @@ def _validate_brightest(brightest):
     """
     if brightest is not None:
         if brightest <= 0:
-            raise ValueError('brightest must be >= 0')
+            msg = 'brightest must be >= 0'
+            raise ValueError(msg)
         bright_int = int(brightest)
         if bright_int != brightest:
-            raise ValueError('brightest must be an integer')
+            msg = 'brightest must be an integer'
+            raise ValueError(msg)
         brightest = bright_int
     return brightest

@@ -12,7 +12,7 @@ from astropy.utils.exceptions import AstropyUserWarning
 from numpy.testing import assert_allclose
 
 from photutils.psf import CircularGaussianPRF, make_psf_model_image
-from photutils.psf.utils import (_get_psf_model_params,
+from photutils.psf.utils import (_get_psf_model_main_params,
                                  _interpolate_missing_data,
                                  _validate_psf_model, fit_2dgaussian, fit_fwhm)
 
@@ -46,6 +46,24 @@ def test_fit_2dgaussian_single(fix_fwhm):
     else:
         assert 'fwhm_fit' in fit_tbl.colnames
         assert_allclose(fit_tbl['fwhm_fit'], fwhm)
+
+    # test with NaNs
+    data[22, 29] = np.nan
+    match = 'Input data contains non-finite values'
+    match = 'Input data contains unmasked non-finite values'
+    with pytest.warns(AstropyUserWarning, match=match):
+        fit = fit_2dgaussian(data, fwhm=3, fix_fwhm=fix_fwhm)
+    fit_tbl = fit.results
+    assert isinstance(fit_tbl, QTable)
+    assert len(fit_tbl) == 1
+
+    # test with NaNs and mask
+    data[22, 29] = np.nan
+    mask = np.isnan(data)
+    fit = fit_2dgaussian(data, fwhm=3, fix_fwhm=fix_fwhm, mask=mask)
+    fit_tbl = fit.results
+    assert isinstance(fit_tbl, QTable)
+    assert len(fit_tbl) == 1
 
 
 @pytest.mark.parametrize(('fix_fwhm', 'with_units'),
@@ -119,11 +137,11 @@ def test_interpolate_missing_data():
     data_int = _interpolate_missing_data(data, mask, method='cubic')
     assert 54 <= data_int[5, 5] <= 56
 
-    match = "'data' must be a 2D array."
+    match = 'data must be a 2D array'
     with pytest.raises(ValueError, match=match):
         _interpolate_missing_data(np.arange(10), mask)
 
-    match = "'mask' and 'data' must have the same shape."
+    match = 'mask and data must have the same shape'
     with pytest.raises(ValueError, match=match):
         _interpolate_missing_data(data, mask[1:, :])
 
@@ -150,21 +168,21 @@ def test_validate_psf_model():
         _validate_psf_model(model)
 
 
-def test_get_psf_model_params():
+def test_get_psf_model_main_params():
     model = CircularGaussianPRF(fwhm=1.0)
-    params = _get_psf_model_params(model)
+    params = _get_psf_model_main_params(model)
     assert len(params) == 3
     assert params == ('x_0', 'y_0', 'flux')
 
     match = 'Invalid PSF model - could not find PSF parameter names'
     model = Gaussian2D()
     with pytest.raises(ValueError, match=match):
-        _get_psf_model_params(model)
+        _get_psf_model_main_params(model)
 
     set_params = ('x_mean', 'y_mean', 'amplitude')
     model.x_name = set_params[0]
     model.y_name = set_params[1]
     model.flux_name = set_params[2]
-    params = _get_psf_model_params(model)
+    params = _get_psf_model_main_params(model)
     assert len(params) == 3
     assert params == set_params

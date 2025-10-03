@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides a base class for profiles.
+Define a base class for profiles.
 """
 
 import abc
@@ -52,24 +52,24 @@ class ProfileBase(metaclass=abc.ABCMeta):
         The method used to determine the overlap of the aperture on the
         pixel grid:
 
-            * ``'exact'`` (default):
-              The exact fractional overlap of the aperture and each
-              pixel is calculated. The aperture weights will contain
-              values between 0 and 1.
+        * ``'exact'`` (default):
+          The exact fractional overlap of the aperture and each pixel is
+          calculated. The aperture weights will contain values between 0
+          and 1.
 
-            * ``'center'``:
-              A pixel is considered to be entirely in or out of the
-              aperture depending on whether its center is in or out of
-              the aperture. The aperture weights will contain values
-              only of 0 (out) and 1 (in).
+        * ``'center'``:
+          A pixel is considered to be entirely in or out of the aperture
+          depending on whether its center is in or out of the aperture.
+          The aperture weights will contain values only of 0 (out) and 1
+          (in).
 
-            * ``'subpixel'``:
-              A pixel is divided into subpixels (see the ``subpixels``
-              keyword), each of which are considered to be entirely in
-              or out of the aperture depending on whether its center is
-              in or out of the aperture. If ``subpixels=1``, this method
-              is equivalent to ``'center'``. The aperture weights will
-              contain values between 0 and 1.
+        * ``'subpixel'``:
+          A pixel is divided into subpixels (see the ``subpixels``
+          keyword), each of which are considered to be entirely in or
+          out of the aperture depending on whether its center is in
+          or out of the aperture. If ``subpixels=1``, this method is
+          equivalent to ``'center'``. The aperture weights will contain
+          values between 0 and 1.
 
     subpixels : int, optional
         For the ``'subpixel'`` method, resample pixels by this factor
@@ -85,7 +85,8 @@ class ProfileBase(metaclass=abc.ABCMeta):
                                                  ('data', 'error'))
 
         if error is not None and error.shape != data.shape:
-            raise ValueError('error must have the same shape as data')
+            msg = 'error must have the same shape as data'
+            raise ValueError(msg)
 
         self.data = data
         self.unit = unit
@@ -100,13 +101,15 @@ class ProfileBase(metaclass=abc.ABCMeta):
     def _validate_radii(self, radii):
         radii = np.array(radii)
         if radii.ndim != 1 or radii.size < 2:
-            raise ValueError('radii must be a 1D array and have at '
-                             'least two values')
+            msg = 'radii must be a 1D array and have at least two values'
+            raise ValueError(msg)
         if radii.min() < 0:
-            raise ValueError('minimum radii must be >= 0')
+            msg = 'minimum radii must be >= 0'
+            raise ValueError(msg)
 
         if not np.all(radii[1:] > radii[:-1]):
-            raise ValueError('radii must be strictly increasing')
+            msg = 'radii must be strictly increasing'
+            raise ValueError(msg)
 
         return radii
 
@@ -120,7 +123,8 @@ class ProfileBase(metaclass=abc.ABCMeta):
             badmask |= ~np.isfinite(error)
         if mask is not None:
             if mask.shape != data.shape:
-                raise ValueError('mask must have the same shape as data')
+                msg = 'mask must have the same shape as data'
+                raise ValueError(msg)
             badmask &= ~mask  # non-finite values not in input mask
             mask |= badmask  # all masked pixels
         else:
@@ -138,7 +142,8 @@ class ProfileBase(metaclass=abc.ABCMeta):
         """
         The profile radius in pixels as a 1D `~numpy.ndarray`.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
     @property
     @abc.abstractmethod
@@ -146,7 +151,8 @@ class ProfileBase(metaclass=abc.ABCMeta):
         """
         The radial profile as a 1D `~numpy.ndarray`.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
     @property
     @abc.abstractmethod
@@ -154,7 +160,8 @@ class ProfileBase(metaclass=abc.ABCMeta):
         """
         The radial profile errors as a 1D `~numpy.ndarray`.
         """
-        raise NotImplementedError('Needs to be implemented in a subclass.')
+        msg = 'Needs to be implemented in a subclass'
+        raise NotImplementedError(msg)
 
     @lazyproperty
     def _circular_apertures(self):
@@ -216,20 +223,23 @@ class ProfileBase(metaclass=abc.ABCMeta):
         method : {'max', 'sum'}, optional
             The method used to normalize the profile:
 
-                * 'max' (default):
-                  The profile is normalized such that its maximum value is
-                  1.
-                * 'sum':
-                  The profile is normalized such that its sum (integral)
-                  is 1.
+            * ``'max'`` (default):
+              The profile is normalized such that its maximum value is
+              1.
+
+            * ``'sum'``:
+              The profile is normalized such that its sum (integral) is
+              1.
         """
         if method == 'max':
             normalization = nanmax(self.profile)
         elif method == 'sum':
             normalization = nansum(self.profile)
         else:
-            raise ValueError('invalid method, must be "max" or "sum"')
+            msg = 'invalid method, must be "max" or "sum"'
+            raise ValueError(msg)
 
+        # NOTE: max and sum will never be NaN (automatically masked)
         if normalization == 0:
             warnings.warn('The profile cannot be normalized because the '
                           'max or sum is zero.', AstropyUserWarning)
@@ -241,6 +251,9 @@ class ProfileBase(metaclass=abc.ABCMeta):
             # need to use __dict__ as these are lazy properties
             self.__dict__['profile'] = self.profile / normalization
             self.__dict__['profile_error'] = self.profile_error / normalization
+            if 'data_profile' in self.__dict__:
+                self.__dict__['data_profile'] = (self.data_profile
+                                                 / normalization)
 
     def unnormalize(self):
         """
@@ -250,6 +263,9 @@ class ProfileBase(metaclass=abc.ABCMeta):
         self.__dict__['profile'] = self.profile * self.normalization_value
         self.__dict__['profile_error'] = (self.profile_error
                                           * self.normalization_value)
+        if 'data_profile' in self.__dict__:
+            self.__dict__['data_profile'] = (self.data_profile
+                                             * self.normalization_value)
         self.normalization_value = 1.0
 
     def plot(self, ax=None, **kwargs):

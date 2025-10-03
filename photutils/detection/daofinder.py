@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module implements the DAOStarFinder class.
+Define the DAOStarFinder class.
 """
 
 import inspect
@@ -86,16 +86,20 @@ class DAOStarFinder(StarFinderBase):
         (2.0*sqrt(2.0*log(2.0)))``].
 
     sharplo : float, optional
-        The lower bound on sharpness for object detection.
+        The lower bound on sharpness for object detection. Objects
+        with sharpness less than ``sharplo`` will be rejected.
 
     sharphi : float, optional
-        The upper bound on sharpness for object detection.
+        The upper bound on sharpness for object detection. Objects
+        with sharpness greater than ``sharphi`` will be rejected.
 
     roundlo : float, optional
-        The lower bound on roundness for object detection.
+        The lower bound on roundness for object detection. Objects
+        with roundness less than ``roundlo`` will be rejected.
 
     roundhi : float, optional
-        The upper bound on roundness for object detection.
+        The upper bound on roundness for object detection. Objects
+        with roundness greater than ``roundhi`` will be rejected.
 
     exclude_border : bool, optional
         Set to `True` to exclude sources found within half the size of
@@ -108,13 +112,13 @@ class DAOStarFinder(StarFinderBase):
         will be selected.
 
     peakmax : float, None, optional
-        The maximum allowed peak pixel value in an object. Only objects
-        whose peak pixel values are strictly smaller than ``peakmax``
-        will be selected. This may be used, for example, to exclude
-        saturated sources. If the star finder is run on an image that is
-        a `~astropy.units.Quantity` array, then ``peakmax`` must have
-        the same units. If ``peakmax`` is set to `None`, then no peak
-        pixel value filtering will be performed.
+        The maximum allowed peak pixel value in an object. Objects with
+        peak pixel values greater than ``peakmax`` will be rejected.
+        This keyword may be used, for example, to exclude saturated
+        sources. If the star finder is run on an image that is a
+        `~astropy.units.Quantity` array, then ``peakmax`` must have the
+        same units. If ``peakmax`` is set to `None`, then no peak pixel
+        value filtering will be performed.
 
     xycoords : `None` or Nx2 `~numpy.ndarray`, optional
         The (x, y) pixel coordinates of the approximate centroid
@@ -167,10 +171,12 @@ class DAOStarFinder(StarFinderBase):
         _ = process_quantities(inputs, names)
 
         if not isscalar(threshold):
-            raise ValueError('threshold must be a scalar value.')
+            msg = 'threshold must be a scalar value'
+            raise ValueError(msg)
 
         if not np.isscalar(fwhm):
-            raise TypeError('fwhm must be a scalar value.')
+            msg = 'fwhm must be a scalar value'
+            raise TypeError(msg)
 
         self.threshold = threshold
         self.fwhm = fwhm
@@ -186,13 +192,15 @@ class DAOStarFinder(StarFinderBase):
         self.peakmax = peakmax
 
         if min_separation < 0:
-            raise ValueError('min_separation must be >= 0')
+            msg = 'min_separation must be >= 0'
+            raise ValueError(msg)
         self.min_separation = min_separation
 
         if xycoords is not None:
             xycoords = np.asarray(xycoords)
             if xycoords.ndim != 2 or xycoords.shape[1] != 2:
-                raise ValueError('xycoords must be shaped as a Nx2 array')
+                msg = 'xycoords must be shaped as a Nx2 array'
+                raise ValueError(msg)
         self.xycoords = xycoords
 
         self.kernel = _StarFinderKernel(self.fwhm,
@@ -318,16 +326,20 @@ class _DAOStarFinderCatalog:
         to create the ``convolved_data``.
 
     sharplo : float, optional
-        The lower bound on sharpness for object detection.
+        The lower bound on sharpness for object detection. Objects
+        with sharpness less than ``sharplo`` will be rejected.
 
     sharphi : float, optional
-        The upper bound on sharpness for object detection.
+        The upper bound on sharpness for object detection. Objects
+        with sharpness greater than ``sharphi`` will be rejected.
 
     roundlo : float, optional
-        The lower bound on roundness for object detection.
+        The lower bound on roundness for object detection. Objects
+        with roundness less than ``roundlo`` will be rejected.
 
     roundhi : float, optional
-        The upper bound on roundness for object detection.
+        The upper bound on roundness for object detection. Objects
+        with roundness greater than ``roundhi`` will be rejected.
 
     brightest : int, None, optional
         The number of brightest objects to keep after sorting the source
@@ -335,13 +347,13 @@ class _DAOStarFinderCatalog:
         will be selected.
 
     peakmax : float, None, optional
-        The maximum allowed peak pixel value in an object. Only objects
-        whose peak pixel values are strictly smaller than ``peakmax``
-        will be selected. This may be used, for example, to exclude
-        saturated sources. If the star finder is run on an image that is
-        a `~astropy.units.Quantity` array, then ``peakmax`` must have
-        the same units. If ``peakmax`` is set to `None`, then no peak
-        pixel value filtering will be performed.
+        The maximum allowed peak pixel value in an object. Objects with
+        peak pixel values greater than ``peakmax`` will be rejected.
+        This keyword may be used, for example, to exclude saturated
+        sources. If the star finder is run on an image that is a
+        `~astropy.units.Quantity` array, then ``peakmax`` must have the
+        same units. If ``peakmax`` is set to `None`, then no peak pixel
+        value filtering will be performed.
     """
 
     def __init__(self, data, convolved_data, xypos, threshold, kernel, *,
@@ -738,15 +750,16 @@ class _DAOStarFinderCatalog:
             warnings.warn('No sources were found.', NoDetectionsWarning)
             return None
 
-        # filter based on sharpness, roundness, and peakmax
-        mask = ((newcat.sharpness > newcat.sharplo)
-                & (newcat.sharpness < newcat.sharphi)
-                & (newcat.roundness1 > newcat.roundlo)
-                & (newcat.roundness1 < newcat.roundhi)
-                & (newcat.roundness2 > newcat.roundlo)
-                & (newcat.roundness2 < newcat.roundhi))
+        # keep sources that are within the sharpness, roundness, and
+        # peakmax (inclusive) bounds
+        mask = ((newcat.sharpness >= newcat.sharplo)
+                & (newcat.sharpness <= newcat.sharphi)
+                & (newcat.roundness1 >= newcat.roundlo)
+                & (newcat.roundness1 <= newcat.roundhi)
+                & (newcat.roundness2 >= newcat.roundlo)
+                & (newcat.roundness2 <= newcat.roundhi))
         if newcat.peakmax is not None:
-            mask &= (newcat.peak < newcat.peakmax)
+            mask &= (newcat.peak <= newcat.peakmax)
         newcat = newcat[mask]
 
         if len(newcat) == 0:

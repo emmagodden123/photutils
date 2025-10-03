@@ -55,6 +55,40 @@ def test_radial_profile(profile_data):
     assert isinstance(rp2.apertures[0], CircularAnnulus)
 
 
+def test_radial_profile_normalization(profile_data):
+    xycen, data, error, _ = profile_data
+
+    edge_radii = np.arange(36)
+    rp1 = RadialProfile(data, xycen, edge_radii, error=error, mask=None)
+
+    profile = rp1.profile
+    profile_error = rp1.profile_error
+    data_profile = rp1.data_profile
+    rp1.normalize()
+    assert np.max(rp1.profile) == 1.0
+    assert np.max(rp1.profile_error) <= np.max(profile_error)
+    assert np.max(rp1.data_profile) <= np.max(data_profile)
+
+    rp1.unnormalize()
+    assert_allclose(rp1.profile, profile)
+    assert_allclose(rp1.profile_error, profile_error)
+    assert_allclose(rp1.data_profile, data_profile)
+
+
+def test_radial_profile_data(profile_data):
+    xycen, data, _, _ = profile_data
+
+    edge_radii = np.arange(36)
+    rp1 = RadialProfile(data, xycen, edge_radii, error=None, mask=None)
+
+    data_radius = rp1.data_radius
+    data_profile = rp1.data_profile
+    assert np.max(data_radius) <= np.max(edge_radii)
+    assert data_radius.shape == data_profile.shape
+    assert np.min(data_profile) >= np.min(data)
+    assert np.max(data_profile) <= np.max(data)
+
+
 def test_radial_profile_inputs(profile_data):
     xycen, data, _, _ = profile_data
 
@@ -165,10 +199,10 @@ def test_radial_profile_nonfinite(profile_data):
     match = 'Input data contains non-finite values'
     with pytest.warns(AstropyUserWarning, match=match):
         rp3 = RadialProfile(data2, xycen, edge_radii, error=error, mask=None)
-        assert_allclose(rp1.profile, rp3.profile)
+    assert_allclose(rp1.profile, rp3.profile)
 
     error2 = error.copy()
     error2[40, 40] = np.inf
     with pytest.warns(AstropyUserWarning, match=match):
         rp4 = RadialProfile(data, xycen, edge_radii, error=error2, mask=None)
-        assert_allclose(rp1.profile, rp4.profile)
+    assert_allclose(rp1.profile, rp4.profile)

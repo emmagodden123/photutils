@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines classes to estimate local background using a
-circular annulus aperture.
+Define classes to estimate local background using a circular annulus
+aperture.
 """
 
 import numpy as np
@@ -36,10 +36,11 @@ class LocalBackground:
         (i.e., sigma-clipped median).
     """
 
-    def __init__(self, inner_radius, outer_radius,
-                 bkg_estimator=MedianBackground()):
+    def __init__(self, inner_radius, outer_radius, bkg_estimator=None):
         self.inner_radius = inner_radius
         self.outer_radius = outer_radius
+        if bkg_estimator is None:
+            bkg_estimator = MedianBackground()
         self.bkg_estimator = bkg_estimator
         self._aperture = CircularAnnulus((0, 0), inner_radius, outer_radius)
 

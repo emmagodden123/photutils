@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides utility functions for image segmentation.
+Define utility functions for image segmentation.
 """
 
 import numpy as np
@@ -34,17 +34,19 @@ def make_2dgaussian_kernel(fwhm, size, mode='oversample', oversampling=10):
 
     mode : {'oversample', 'center', 'linear_interp', 'integrate'}, optional
         The mode to use for discretizing the 2D Gaussian model:
-            * 'oversample' (default):
-              Discretize model by taking the average on an oversampled
-              grid.
-            * 'center':
-              Discretize model by taking the value at the center of the
-              bin.
-            * 'linear_interp':
-              Discretize model by performing a bilinear interpolation
-              between the values at the corners of the bin.
-            * 'integrate':
-              Discretize model by integrating the model over the bin.
+
+        * 'oversample' (default):
+          Discretize model by taking the average on an oversampled grid.
+
+        * 'center':
+          Discretize model by taking the value at the center of the bin.
+
+        * 'linear_interp':
+          Discretize model by performing a bilinear interpolation
+          between the values at the corners of the bin.
+
+        * 'integrate':
+          Discretize model by integrating the model over the bin.
 
     oversampling : int, optional
         The oversampling factor used when ``mode='oversample'``.
@@ -94,8 +96,8 @@ def _make_binary_structure(ndim, connectivity):
         elif connectivity == 8:
             footprint = np.ones((3, 3), dtype=int)
         else:
-            raise ValueError(f'Invalid connectivity={connectivity}. '
-                             'Options are 4 or 8.')
+            msg = f'Invalid connectivity={connectivity} -- options are 4 or 8'
+            raise ValueError(msg)
     else:
         footprint = generate_binary_structure(ndim, 1)
 

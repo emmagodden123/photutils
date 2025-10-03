@@ -12,6 +12,10 @@ functionality of the 2.0 release. In addition to these changes,
 Photutils 2.0 includes a large number of smaller improvements and bug
 fixes, which are described in the full :ref:`changelog`.
 
+.. contents::
+   :local:
+   :depth: 2
+
 
 Imports
 =======
@@ -65,6 +69,10 @@ To reduce memory usage, ``Background2D`` no longer keeps a cached copy
 of the returned ``background`` and ``background_rms`` properties. Assign
 these properties to variables if you need to use them multiple times,
 otherwise they will need to be recomputed.
+
+The ``background``, ``background_rms``, ``background_mesh``, and
+``background_rms_mesh`` properties now have the same ``dtype`` as the
+input data.
 
 Two new properties were also added to the ``Background2D`` class,
 ``npixels_mesh`` and ``npixels_map``, that give a 2D array of the number
@@ -171,11 +179,35 @@ classes.
 The fitter used in ``RadialProfile`` to fit the profile with a Gaussian
 was also changed from ``LevMarLSQFitter`` to ``TRFLSQFitter``.
 
-The fitter used in ``centroid_1dg`` and ``centroid_2dg`` was changed
-from ``LevMarLSQFitter`` to ``LMLSQFitter``.
+The fitter used in ``centroid_1dg`` and ``centroid_2dg`` was also
+changed from ``LevMarLSQFitter`` to ``TRFLSQFitter``.
 
 For more information about Astropy's non-linear fitters, see
 :ref:`astropy:modeling-getting-started-nonlinear-notes`.
+
+
+Breaking API Change for PSF Photometry residual/model images
+============================================================
+
+The ``sub_shape`` keyword in `~photutils.psf.IterativePSFPhotometry`
+now defaults to using the model bounding box to define the shape. This
+is a change from the previous behavior where the default shape was set
+to ``fit_shape``. In general, one should want the subtraction shape to
+cover a large portion of the model image, which the bounding box does.
+If one wants to use a different shape, then the ``sub_shape`` keyword
+can be explicitly set. If the PSF model does not have a bounding box
+attribute, then the ``sub_shape`` keyword must be set to define the
+subtraction shape.
+
+Similarly, ``psf_shape`` is now an optional keyword in
+the ``make_model_image`` and ``make_residual_image``
+methods of `~photutils.psf.PSFPhotometry` and
+`~photutils.psf.IterativePSFPhotometry`. The value defaults to using the
+model bounding box to define the shape and is required only if the PSF
+model does not have a bounding box attribute. In general, one should
+want the model and residual images to be constructed using a large
+portion of model image, which the bounding box does. If one wants to use
+a different shape, then the ``psf_shape`` keyword can be explicitly set.
 
 
 Bounding model fits in PSF Photometry
@@ -204,9 +236,32 @@ Segmentation Image data type
 ============================
 
 The `~photutils.segmentation.detect_sources` and
-`~photutils.segmentation.deblend_sources` functions now return a
+`~photutils.segmentation.deblend_sources` functions and
+`~photutils.segmentation.SourceFinder` class now return a
 ``SegmentationImage`` instance whose data dtype is ``np.int32`` instead
 of ``int`` (``int64``) unless more than (2**32 - 1) labels are needed.
+
+Also, the ``relabel_consecutive``, ``resassign_label(s)``,
+``keep_label(s)``, ``remove_label(s)``, ``remove_border_labels``, and
+``remove_masked_labels`` methods now keep the original dtype of the
+segmentation image instead of always changing it to ``int`` (``int64``).
+
+
+Improved performance for source deblending
+==========================================
+
+Performance improvements and significant reductions in memory usage
+were made for source deblending, especially for large sources
+and/or large ``nlevels`` values. The memory usage is now mostly
+independent of the number of ``nlevels``, and the memory usage
+will be significantly reduced for large sources. This affects
+the `~photutils.segmentation.deblend_sources` function and the
+`~photutils.segmentation.SourceFinder` class.
+
+Additionally, the accuracy of the deblending progress bar is now
+improved when using multiprocessing. The progress bar now also displays
+the ID label number of either the current source being deblended
+(serial) or the last source that was deblended (multiprocessing).
 
 
 DAOStarFinder flux and mag changes
@@ -240,6 +295,14 @@ Quantity arrays in Centroids
 ``Quantity`` arrays can now be input to
 `~photutils.centroids.centroid_1dg` and
 `~photutils.centroids.centroid_2dg`.
+
+
+New Sphinx Theme
+================
+
+The documentation now uses the `PyData Sphinx
+<https://pydata-sphinx-theme.readthedocs.io/>`_ theme, which is a
+modern, responsive theme that is easy to read and navigate.
 
 
 Other changes

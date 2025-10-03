@@ -1,12 +1,14 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides classes to perform grouping of stars.
+Define classes to perform grouping of stars.
 """
 
 from collections import defaultdict
 
 import numpy as np
 from scipy.cluster.hierarchy import fclusterdata
+
+from photutils.utils._repr import make_repr
 
 __all__ = ['SourceGrouper']
 
@@ -30,6 +32,9 @@ class SourceGrouper:
 
     def __init__(self, min_separation):
         self.min_separation = min_separation
+
+    def __repr__(self):
+        return make_repr(self, 'min_separation')
 
     def __call__(self, x, y):
         """
@@ -70,9 +75,11 @@ class SourceGrouper:
         x = np.atleast_1d(x)
         y = np.atleast_1d(y)
         if x.shape != y.shape:
-            raise ValueError('x and y must have the same shape')
+            msg = 'x and y must have the same shape'
+            raise ValueError(msg)
         if x.shape == (0,):  # no sources
-            raise ValueError('x and y must not be empty')
+            msg = 'x and y must not be empty'
+            raise ValueError(msg)
         if x.shape == (1,):  # single source -> single group
             return np.array([1])
 

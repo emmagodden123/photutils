@@ -15,16 +15,12 @@ See astropy.sphinx.conf for which values are set there.
 
 import os
 import sys
-from datetime import datetime, timezone
+import tomllib
+from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
 
 from sphinx.util import logging
-
-if sys.version_info < (3, 11):
-    import tomli as tomllib
-else:
-    import tomllib
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +85,7 @@ rst_epilog = """
 # -- Project information ------------------------------------------------------
 project = project_meta['name']
 author = project_meta['authors'][0]['name']
-project_copyright = f'2011-{datetime.now(tz=timezone.utc).year}, {author}'
+project_copyright = f'2011-{datetime.now(tz=UTC).year}, {author}'
 github_project = 'astropy/photutils'
 
 # The version info for the project you're documenting, acts as
@@ -104,64 +100,36 @@ dev = 'dev' in release
 
 # -- Options for HTML output --------------------------------------------------
 
-html_theme_options.update(  # noqa: F405
-    {
-        'github_url': 'https://github.com/astropy/photutils',
-        'header_links_before_dropdown': 6,
-        'navigation_with_keys': False,
-        'use_edit_page_button': False,
-        'logo': {
-            'image_light': 'photutils_logo_light.svg',
-            'image_dark': 'photutils_logo_dark.svg',
-        },
-    }
-)
+html_theme_options = {
+    'header_links_before_dropdown': 6,
+    'collapse_navigation': True,
+    'navigation_depth': 2,
+    'show_nav_level': 2,
+    'navigation_with_keys': False,
+    'use_edit_page_button': False,
+    'logo': {
+        'image_light': 'photutils_logo_light_plain_path.svg',
+        'image_dark': 'photutils_logo_dark_plain_path.svg',
+    },
+    # alternate way to set the logo
+    # 'github_url': 'https://github.com/astropy/photutils',
+    'icon_links': [
+        {'name': 'GitHub',
+         'url': 'https://github.com/astropy/photutils',
+         'icon': 'fa-brands fa-github',
+         'type': 'fontawesome',
+         },
+    ],
+}
 
-html_show_sourcelink = False
-
-# The global astropy configuration uses a custom theme,
-# 'bootstrap-astropy', which is installed along with astropy. A
-# different theme can be used or the options for this theme can be
-# modified by overriding some of the variables set in the global
-# configuration. The variables set in the global configuration are
-# listed below, commented out.
-
-# Add any paths that contain custom themes here, relative to this
-# directory.
-# html_theme_path = []
-
-# The theme to use for HTML and HTML Help pages. See the documentation
-# for a list of builtin themes. To override the custom theme, set this
-# to the name of a builtin theme or the name of a custom theme in
-# html_theme_path.
-# html_theme = None
-
-# Custom sidebar templates, maps document names to template names.
-# html_sidebars = {}
-
-# The name of an image file (relative to this directory) to place at the
-# top of the sidebar.
-# html_logo = ''
-
-# The name of an image file (within the static path) to use as favicon
-# of the docs. This file should be a Windows icon file (.ico) being
-# 16x16 or 32x32 pixels large.
-html_favicon = os.path.join('_static', 'favicon.ico')
-
-# A "Last built" timestamp is inserted at every page bottom, using the
-# given strftime format. Set to '' to omit this timestamp.
-# html_last_updated_fmt = '%d %b %Y'
-
-# The name for this set of Sphinx documents. If None, it defaults to
-# "<project> v<release>".
 html_title = f'{project} {release}'
+html_show_sourcelink = False
+html_favicon = os.path.join('_static', 'photutils_logo.ico')
+html_static_path = ['_static']
+html_css_files = ['custom.css']  # path relative to _static
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = project + 'doc'
-
-# Static files to copy after template files
-html_static_path = ['_static']
-# html_style = 'photutils.css'
 
 # Set canonical URL from the Read the Docs Domain
 html_baseurl = os.environ.get('READTHEDOCS_CANONICAL_URL', '')
@@ -179,6 +147,9 @@ html_context = {
     # Tell Jinja2 templates the build is running on Read the Docs
     'READTHEDOCS': os.environ.get('READTHEDOCS', '') == 'True',
 }
+
+# fix size of inheritance diagrams (e.g., PSF diagram was cut off)
+inheritance_graph_attrs = {'size': '""'}
 
 # -- Options for LaTeX output -------------------------------------------------
 # Grouping the document tree into LaTeX files. List of tuples (source

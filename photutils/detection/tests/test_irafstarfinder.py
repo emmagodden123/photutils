@@ -9,6 +9,7 @@ import pytest
 from numpy.testing import assert_array_equal
 
 from photutils.detection import IRAFStarFinder
+from photutils.psf import CircularGaussianPRF
 from photutils.utils.exceptions import NoDetectionsWarning
 
 
@@ -49,47 +50,47 @@ class TestIRAFStarFinder:
     def test_irafstarfind_nosources(self):
         data = np.ones((3, 3))
         match = 'No sources were found'
+        finder = IRAFStarFinder(threshold=10, fwhm=1)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = IRAFStarFinder(threshold=10, fwhm=1)
             tbl = finder(data)
-            assert tbl is None
+        assert tbl is None
 
         data = np.ones((5, 5))
         data[2, 2] = 10.0
+        finder = IRAFStarFinder(threshold=0.1, fwhm=0.1)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = IRAFStarFinder(threshold=0.1, fwhm=0.1)
             tbl = finder(-data)
-            assert tbl is None
+        assert tbl is None
 
     def test_irafstarfind_sharpness(self, data):
         """
         Sources found, but none pass the sharpness criteria.
         """
         match = 'Sources were found, but none pass'
+        finder = IRAFStarFinder(threshold=1, fwhm=1.0, sharplo=2.0)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = IRAFStarFinder(threshold=1, fwhm=1.0, sharplo=2.0)
             tbl = finder(data)
-            assert tbl is None
+        assert tbl is None
 
     def test_irafstarfind_roundness(self, data):
         """
         Sources found, but none pass the roundness criteria.
         """
         match = 'Sources were found, but none pass'
+        finder = IRAFStarFinder(threshold=1, fwhm=1.0, roundlo=1.0)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = IRAFStarFinder(threshold=1, fwhm=1.0, roundlo=1.0)
             tbl = finder(data)
-            assert tbl is None
+        assert tbl is None
 
     def test_irafstarfind_peakmax(self, data):
         """
         Sources found, but none pass the peakmax criteria.
         """
         match = 'Sources were found, but none pass'
+        finder = IRAFStarFinder(threshold=1, fwhm=1.0, peakmax=1.0)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = IRAFStarFinder(threshold=1, fwhm=1.0, peakmax=1.0)
             tbl = finder(data)
-            assert tbl is None
+        assert tbl is None
 
     def test_irafstarfind_peakmax_filtering(self, data):
         """
@@ -171,3 +172,54 @@ class TestIRAFStarFinder:
         assert cat.isscalar
         flux = cat.flux[0]  # evaluate the flux so it can be sliced
         assert cat[0].flux == flux
+
+    def test_all_border_sources(self):
+        model1 = CircularGaussianPRF(flux=100, x_0=1, y_0=1, fwhm=2)
+        model2 = CircularGaussianPRF(flux=100, x_0=50, y_0=50, fwhm=2)
+        model3 = CircularGaussianPRF(flux=100, x_0=30, y_0=30, fwhm=2)
+
+        threshold = 1
+        yy, xx = np.mgrid[:51, :51]
+        data = model1(xx, yy)
+
+        # test single source within the border region
+        finder = IRAFStarFinder(threshold=threshold, fwhm=2.0, roundlo=-0.1,
+                                exclude_border=True)
+        with pytest.warns(NoDetectionsWarning):
+            tbl = finder(data)
+        assert tbl is None
+
+        # test multiple sources all within the border region
+        data += model2(xx, yy)
+        with pytest.warns(NoDetectionsWarning):
+            tbl = finder(data)
+        assert tbl is None
+
+        # test multiple sources with some within the border region
+        data += model3(xx, yy)
+        tbl = finder(data)
+        assert len(tbl) == 1
+
+    def test_interval_ends_included(self):
+        # https://github.com/astropy/photutils/issues/1977
+        data = np.zeros((46, 64))
+
+        x = 33
+        y = 21
+        data[y - 1: y + 2, x - 1: x + 2] = [
+            [0.1, 0.6, 0.1],
+            [0.6, 0.8, 0.6],
+            [0.1, 0.6, 0.1],
+        ]
+
+        finder = IRAFStarFinder(
+            threshold=0,
+            fwhm=2.5,
+            roundlo=0,
+            peakmax=0.8,
+        )
+        tbl = finder.find_stars(data)
+
+        assert len(tbl) == 1
+        assert tbl[0]['roundness'] < 1.e-15
+        assert tbl[0]['peak'] == 0.8

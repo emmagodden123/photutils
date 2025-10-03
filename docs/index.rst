@@ -5,13 +5,13 @@
 
     <div style="min-height:0.1em;"></div>
 
-.. image:: _static/photutils_logo_light.svg
+.. image:: _static/photutils_logo_light_plain_path.svg
     :class: only-light
     :width: 55%
     :align: center
     :alt: Photutils logo
 
-.. image:: _static/photutils_logo_dark.svg
+.. image:: _static/photutils_logo_dark_plain_path.svg
     :class: only-dark
     :width: 55%
     :align: center
@@ -22,15 +22,16 @@
 Photutils
 *********
 
-| **Version**: |release| -- **Date**: |today|
-| Useful links: :doc:`getting_started/install` | :ref:`whatsnew-2.0`
+| **Version**: |release|
+| **Date**: |today|
+| **Useful links**: :doc:`getting_started/install` | :doc:`release_notes/index`
 
 **Photutils** is a Python library that provides commonly-used tools
 and key functionality for detecting and performing photometry of
 astronomical sources. Tools are provided for background estimation,
 star finding, source detection and extraction, aperture photometry,
 PSF photometry, image segmentation, centroids, radial profiles,
-and elliptical isophote fitting. It is an a `coordinated package
+and elliptical isophote fitting. It is a `coordinated package
 <https://www.astropy.org/affiliated/index.html>`_ of `Astropy`_ and
 integrates well with other Astropy packages, making it a powerful tool
 for astronomical image analysis.
@@ -53,7 +54,7 @@ for astronomical image analysis.
     user_guide/index
     reference/index
     development/index
-    Release Notes <changelog>
+    Release Notes <release_notes/index>
 
 
 .. grid:: 3
@@ -66,8 +67,8 @@ for astronomical image analysis.
         ^^^^^^^^^^^^^^^^^^^
 
         New to Photutils? Check out the getting started guides. They
-        contain an introduction to Photutils's main concepts and links
-        to additional tutorials.
+        contain an overview of Photutils and an introduction to its main
+        concepts.
 
         +++
 

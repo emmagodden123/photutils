@@ -67,15 +67,15 @@ class TestDAOStarFinder:
 
     def test_daofind_nosources(self, data):
         match = 'No sources were found'
+        finder = DAOStarFinder(threshold=100, fwhm=2)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = DAOStarFinder(threshold=100, fwhm=2)
             tbl = finder(data)
-            assert tbl is None
+        assert tbl is None
 
+        finder = DAOStarFinder(threshold=1, fwhm=2)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = DAOStarFinder(threshold=1, fwhm=2)
             tbl = finder(-data)
-            assert tbl is None
+        assert tbl is None
 
     def test_daofind_exclude_border(self):
         data = np.zeros((9, 9))
@@ -95,30 +95,30 @@ class TestDAOStarFinder:
         Sources found, but none pass the sharpness criteria.
         """
         match = 'Sources were found, but none pass'
+        finder = DAOStarFinder(threshold=1, fwhm=1.0, sharplo=1.0)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = DAOStarFinder(threshold=1, fwhm=1.0, sharplo=1.0)
             tbl = finder(data)
-            assert tbl is None
+        assert tbl is None
 
     def test_daofind_roundness(self, data):
         """
         Sources found, but none pass the roundness criteria.
         """
         match = 'Sources were found, but none pass'
+        finder = DAOStarFinder(threshold=1, fwhm=1.0, roundlo=1.0)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = DAOStarFinder(threshold=1, fwhm=1.0, roundlo=1.0)
             tbl = finder(data)
-            assert tbl is None
+        assert tbl is None
 
     def test_daofind_peakmax(self, data):
         """
         Sources found, but none pass the peakmax criteria.
         """
         match = 'Sources were found, but none pass'
+        finder = DAOStarFinder(threshold=1, fwhm=1.0, peakmax=1.0)
         with pytest.warns(NoDetectionsWarning, match=match):
-            finder = DAOStarFinder(threshold=1, fwhm=1.0, peakmax=1.0)
             tbl = finder(data)
-            assert tbl is None
+        assert tbl is None
 
     def test_daofind_peakmax_filtering(self, data):
         """
@@ -205,3 +205,30 @@ class TestDAOStarFinder:
         assert cat.isscalar
         flux = cat.flux[0]  # evaluate the flux so it can be sliced
         assert cat[0].flux == flux
+
+    def test_interval_ends_included(self):
+        # https://github.com/astropy/photutils/issues/1977
+        data = np.zeros((46, 64))
+
+        x = 33
+        y = 21
+
+        data[y - 1: y + 2, x - 1: x + 2] = [
+            [1.0, 2.0, 1.0],
+            [2.0, 1.0e20, 2.0],
+            [1.0, 2.0, 1.0],
+        ]
+
+        finder = DAOStarFinder(
+            threshold=0,
+            fwhm=2.5,
+            roundlo=0,
+            sharphi=1.407913491884342,
+            peakmax=1.0e20,
+        )
+        tbl = finder.find_stars(data)
+
+        assert len(tbl) == 1
+        assert tbl[0]['roundness1'] < 1.e-15
+        assert tbl[0]['roundness2'] == 0.0
+        assert tbl[0]['peak'] == 1.0e20

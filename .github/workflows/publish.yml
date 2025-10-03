@@ -2,8 +2,8 @@ name: Wheel building
 
 on:
   schedule:
-    # run every Monday at 4:30am UTC
-    - cron: '30 4 * * 1'
+    # run every day at 4:30am UTC
+    - cron: '30 4 * * *'
   pull_request:
     # We also want this workflow triggered if the 'Build all wheels'
     # label is added or present when PR is updated
@@ -32,7 +32,7 @@ jobs:
     permissions:
       contents: none
 
-    uses: OpenAstronomy/github-actions-workflows/.github/workflows/publish.yml@924441154cf3053034c6513d5e06c69d262fb9a6  # v1.13.0
+    uses: OpenAstronomy/github-actions-workflows/.github/workflows/publish.yml@28e947497bed4d6ec3fa1d66d198e95a1d17bc63  # v2.2.1
 
     if: (github.repository == 'astropy/photutils' && (github.event_name == 'push' ||  github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'Build all wheels')))
     with:
@@ -43,25 +43,14 @@ jobs:
       test_command: pytest -p no:warnings --pyargs photutils
       targets: |
         # Linux wheels
-        - cp310-manylinux_x86_64
-        - cp311-manylinux_x86_64
-        - cp312-manylinux_x86_64
+        - cp*-manylinux_x86_64
 
         # MacOS X wheels
-        # Note that the arm64 wheels are not actually tested so we rely
-        # on local manual testing of these to make sure they are ok.
-        - cp310*macosx_x86_64
-        - cp311*macosx_x86_64
-        - cp312*macosx_x86_64
-
-        - cp310*macosx_arm64
-        - cp311*macosx_arm64
-        - cp312*macosx_arm64
+        - cp*-macosx_x86_64
+        - cp*-macosx_arm64
 
         # Windows wheels
-        - cp310*win_amd64
-        - cp311*win_amd64
-        - cp312*win_amd64
+        - cp*-win_amd64
 
       # Developer wheels
       upload_to_anaconda: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}

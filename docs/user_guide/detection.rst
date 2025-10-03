@@ -1,17 +1,16 @@
 .. _source_detection:
 
-Source Detection (`photutils.detection`)
-========================================
+Point-like Source Detection (`photutils.detection`)
+===================================================
 
 Introduction
 ------------
 
-One generally needs to identify astronomical sources in their data
-before they can perform photometry or morphological measurements.
-Photutils provides several tools designed specifically to detect
-point-like (stellar) sources in an astronomical image. Photutils also
-provides a function to identify local peaks in an image that are above a
-specified threshold value.
+One generally needs to identify astronomical sources in the data before
+performing photometry or other measurements. The `photutils.detection`
+subpackage provides tools to detect point-like (stellar) sources in an
+image. This subpackage also provides tools to find local peaks in an
+image that are above a specified threshold value.
 
 For general-use source detection and extraction of both point-like
 and extended sources, please see :ref:`Image Segmentation
@@ -197,7 +196,7 @@ keyword to :func:`~photutils.detection.find_peaks` to also compute
 centroid coordinates with subpixel precision.
 
 As a simple example, let's find the local peaks in an image that are 5
-sigma above the background and a separated by at least 5 pixels::
+sigma above the background and are separated by at least 5 pixels::
 
     >>> from astropy.stats import sigma_clipped_stats
     >>> from photutils.datasets import make_100gaussians_image

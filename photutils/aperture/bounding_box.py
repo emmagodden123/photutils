@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines a class for a rectangular bounding box.
+Define a class for a rectangular bounding box.
 """
 
 import math
@@ -58,13 +58,15 @@ class BoundingBox:
     def __init__(self, ixmin, ixmax, iymin, iymax):
         for value in (ixmin, ixmax, iymin, iymax):
             if not isinstance(value, (int, np.integer)):
-                raise TypeError('ixmin, ixmax, iymin, and iymax must all be '
-                                'integers')
+                msg = 'ixmin, ixmax, iymin, and iymax must all be integers'
+                raise TypeError(msg)
 
         if ixmin > ixmax:
-            raise ValueError('ixmin must be <= ixmax')
+            msg = 'ixmin must be <= ixmax'
+            raise ValueError(msg)
         if iymin > iymax:
-            raise ValueError('iymin must be <= iymax')
+            msg = 'iymin must be <= iymax'
+            raise ValueError(msg)
 
         self.ixmin = ixmin
         self.ixmax = ixmax
@@ -82,9 +84,9 @@ class BoundingBox:
         from (index - 0.5) to (index + 0.5). For example, the pixel edge
         spans of the following pixels are:
 
-        - pixel 0: from -0.5 to 0.5
-        - pixel 1: from 0.5 to 1.5
-        - pixel 2: from 1.5 to 2.5
+        * pixel 0: from -0.5 to 0.5
+        * pixel 1: from 0.5 to 1.5
+        * pixel 2: from 1.5 to 2.5
 
         In addition, because `BoundingBox` upper limits are exclusive
         (by definition), 1 is added to the upper pixel edges. See
@@ -121,8 +123,8 @@ class BoundingBox:
 
     def __eq__(self, other):
         if not isinstance(other, BoundingBox):
-            raise TypeError('Can compare BoundingBox only to another '
-                            'BoundingBox.')
+            msg = 'Can compare BoundingBox only to another BoundingBox.'
+            raise TypeError(msg)
 
         return ((self.ixmin == other.ixmin)
                 and (self.ixmax == other.ixmax)
@@ -182,7 +184,8 @@ class BoundingBox:
             the given image shape.
         """
         if len(shape) != 2:
-            raise ValueError('input shape must have 2 elements.')
+            msg = 'input shape must have 2 elements'
+            raise ValueError(msg)
 
         xmin = self.ixmin
         xmax = self.ixmax
@@ -246,10 +249,10 @@ class BoundingBox:
             fig = plt.figure()
             ax = fig.add_subplot(1, 1, 1)
             rng = np.random.default_rng(0)
-            ax.imshow(rng.random((10, 10)), interpolation='nearest',
-                      cmap='viridis')
+            ax.imshow(rng.random((10, 10)), origin='lower',
+                      interpolation='nearest')
             ax.add_patch(bbox.as_artist(facecolor='none', edgecolor='white',
-                         lw=2.))
+                         lw=2.0))
         """
         from matplotlib.patches import Rectangle
 
@@ -318,8 +321,8 @@ class BoundingBox:
             `BoundingBox` with this one.
         """
         if not isinstance(other, BoundingBox):
-            raise TypeError('BoundingBox can be joined only with another '
-                            'BoundingBox.')
+            msg = 'BoundingBox can be joined only with another BoundingBox.'
+            raise TypeError(msg)
 
         ixmin = min((self.ixmin, other.ixmin))
         ixmax = max((self.ixmax, other.ixmax))
@@ -345,8 +348,9 @@ class BoundingBox:
             `BoundingBox` with this one.
         """
         if not isinstance(other, BoundingBox):
-            raise TypeError('BoundingBox can be intersected only with '
-                            'another BoundingBox.')
+            msg = ('BoundingBox can be intersected only with another '
+                   'BoundingBox.')
+            raise TypeError(msg)
 
         ixmin = max(self.ixmin, other.ixmin)
         ixmax = min(self.ixmax, other.ixmax)

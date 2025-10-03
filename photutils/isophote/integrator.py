@@ -1,13 +1,13 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for pixel integration.
+Define tools for integrating over pixels.
 """
 
 import math
 
 import numpy as np
 
-__all__ = ['INTEGRATORS', 'NEAREST_NEIGHBOR', 'BILINEAR', 'MEAN', 'MEDIAN']
+__all__ = ['BILINEAR', 'INTEGRATORS', 'MEAN', 'MEDIAN', 'NEAREST_NEIGHBOR']
 
 
 # integration modes
@@ -350,5 +350,5 @@ INTEGRATORS = {
     NEAREST_NEIGHBOR: _NearestNeighborIntegrator,
     BILINEAR: _BiLinearIntegrator,
     MEAN: _MeanIntegrator,
-    MEDIAN: _MedianIntegrator
+    MEDIAN: _MedianIntegrator,
 }

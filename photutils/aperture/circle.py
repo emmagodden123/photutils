@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines circular and circular-annulus apertures in both
-pixel and sky coordinates.
+Define circular and circular-annulus apertures in both pixel and sky
+coordinates.
 """
 
 import math
@@ -15,8 +15,13 @@ from photutils.aperture.core import PixelAperture, SkyAperture
 from photutils.aperture.mask import ApertureMask
 from photutils.geometry import circular_overlap_grid
 
-__all__ = ['CircularMaskMixin', 'CircularAperture', 'CircularAnnulus',
-           'SkyCircularAperture', 'SkyCircularAnnulus']
+__all__ = [
+    'CircularAnnulus',
+    'CircularAperture',
+    'CircularMaskMixin',
+    'SkyCircularAnnulus',
+    'SkyCircularAperture',
+]
 
 
 class CircularMaskMixin:
@@ -37,25 +42,24 @@ class CircularMaskMixin:
             aperture types. Note that the more precise methods are
             generally slower. The following methods are available:
 
-                * ``'exact'`` (default):
-                  The exact fractional overlap of the aperture and each
-                  pixel is calculated. The aperture weights will contain
-                  values between 0 and 1.
+            * ``'exact'`` (default):
+              The exact fractional overlap of the aperture and each
+              pixel is calculated. The aperture weights will contain
+              values between 0 and 1.
 
-                * ``'center'``:
-                  A pixel is considered to be entirely in or out of the
-                  aperture depending on whether its center is in or out
-                  of the aperture. The aperture weights will contain
-                  values only of 0 (out) and 1 (in).
+            * ``'center'``:
+              A pixel is considered to be entirely in or out of the
+              aperture depending on whether its center is in or out of
+              the aperture. The aperture weights will contain values
+              only of 0 (out) and 1 (in).
 
-                * ``'subpixel'``:
-                  A pixel is divided into subpixels (see the
-                  ``subpixels`` keyword), each of which are considered
-                  to be entirely in or out of the aperture depending
-                  on whether its center is in or out of the aperture.
-                  If ``subpixels=1``, this method is equivalent to
-                  ``'center'``. The aperture weights will contain values
-                  between 0 and 1.
+            * ``'subpixel'``:
+              A pixel is divided into subpixels (see the ``subpixels``
+              keyword), each of which are considered to be entirely in
+              or out of the aperture depending on whether its center is
+              in or out of the aperture. If ``subpixels=1``, this method
+              is equivalent to ``'center'``. The aperture weights will
+              contain values between 0 and 1.
 
         subpixels : int, optional
             For the ``'subpixel'`` method, resample pixels by this
@@ -79,7 +83,8 @@ class CircularMaskMixin:
         elif hasattr(self, 'r_out'):  # annulus
             radius = self.r_out
         else:
-            raise ValueError('Cannot determine the aperture radius.')
+            msg = 'Cannot determine the aperture radius'
+            raise ValueError(msg)
 
         masks = []
         for bbox, edges in zip(self._bbox, self._centered_edges, strict=True):
@@ -115,8 +120,8 @@ class CircularAperture(CircularMaskMixin, PixelAperture):
         The pixel coordinates of the aperture center(s) in one of the
         following formats:
 
-            * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
-            * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
+        * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
+        * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
 
     r : float
         The radius of the circle in pixels.
@@ -231,8 +236,8 @@ class CircularAnnulus(CircularMaskMixin, PixelAperture):
         The pixel coordinates of the aperture center(s) in one of the
         following formats:
 
-            * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
-            * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
+        * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
+        * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
 
     r_in : float
         The inner radius of the circular annulus in pixels.
@@ -269,7 +274,8 @@ class CircularAnnulus(CircularMaskMixin, PixelAperture):
 
     def __init__(self, positions, r_in, r_out):
         if not r_out > r_in:
-            raise ValueError('r_out must be greater than r_in')
+            msg = 'r_out must be greater than r_in'
+            raise ValueError(msg)
 
         self.positions = positions
         self.r_in = r_in
@@ -439,8 +445,8 @@ class SkyCircularAnnulus(SkyAperture):
 
     def __init__(self, positions, r_in, r_out):
         if r_in.unit.physical_type != r_out.unit.physical_type:
-            raise ValueError('r_in and r_out should either both be angles '
-                             'or in pixels.')
+            msg = 'r_in and r_out should either both be angles or in pixels'
+            raise ValueError(msg)
 
         self.positions = positions
         self.r_in = r_in

@@ -1,13 +1,18 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides window (or tapering) functions for matching PSFs
-using Fourier methods.
+Provide window (or tapering) functions for matching PSFs using Fourier
+methods.
 """
 
 import numpy as np
 
-__all__ = ['SplitCosineBellWindow', 'HanningWindow', 'TukeyWindow',
-           'CosineBellWindow', 'TopHatWindow']
+__all__ = [
+    'CosineBellWindow',
+    'HanningWindow',
+    'SplitCosineBellWindow',
+    'TopHatWindow',
+    'TukeyWindow',
+]
 
 
 def _radial_distance(shape):
@@ -27,7 +32,8 @@ def _radial_distance(shape):
         array center.
     """
     if len(shape) != 2:
-        raise ValueError('shape must have only 2 elements')
+        msg = 'shape must have only 2 elements'
+        raise ValueError(msg)
     position = (np.asarray(shape) - 1) / 2.0
     x = np.arange(shape[1]) - position[1]
     y = np.arange(shape[0]) - position[0]
@@ -58,7 +64,7 @@ class SplitCosineBellWindow:
 
         taper = SplitCosineBellWindow(alpha=0.4, beta=0.3)
         data = taper((101, 101))
-        plt.imshow(data, cmap='viridis', origin='lower')
+        plt.imshow(data, origin='lower')
         plt.colorbar()
 
     A 1D cut across the image center:
@@ -129,7 +135,7 @@ class HanningWindow(SplitCosineBellWindow):
 
         taper = HanningWindow()
         data = taper((101, 101))
-        plt.imshow(data, cmap='viridis', origin='lower')
+        plt.imshow(data, origin='lower')
         plt.colorbar()
 
     A 1D cut across the image center:
@@ -173,7 +179,7 @@ class TukeyWindow(SplitCosineBellWindow):
 
         taper = TukeyWindow(alpha=0.4)
         data = taper((101, 101))
-        plt.imshow(data, cmap='viridis', origin='lower')
+        plt.imshow(data, origin='lower')
         plt.colorbar()
 
     A 1D cut across the image center:
@@ -212,7 +218,7 @@ class CosineBellWindow(SplitCosineBellWindow):
 
         taper = CosineBellWindow(alpha=0.3)
         data = taper((101, 101))
-        plt.imshow(data, cmap='viridis', origin='lower')
+        plt.imshow(data, origin='lower')
         plt.colorbar()
 
     A 1D cut across the image center:
@@ -252,8 +258,7 @@ class TopHatWindow(SplitCosineBellWindow):
 
         taper = TopHatWindow(beta=0.4)
         data = taper((101, 101))
-        plt.imshow(data, cmap='viridis', origin='lower',
-                   interpolation='nearest')
+        plt.imshow(data, origin='lower', interpolation='nearest')
         plt.colorbar()
 
     A 1D cut across the image center:

@@ -1,4 +1,408 @@
-2.0.0 (unreleased)
+3.0.0 (unreleased)
+------------------
+
+General
+^^^^^^^
+
+New Features
+^^^^^^^^^^^^
+
+Bug Fixes
+^^^^^^^^^
+
+API Changes
+^^^^^^^^^^^
+
+- ``photutils.background``
+
+  - Removed the deprecated ``edge_method`` keyword from ``Background2D``.
+    [#2102]
+
+  - Removed the deprecated ``background_mesh_masked``,
+    ``background_rms_mesh_masked``, and ``mesh_nmasked`` properties from
+    ``Background2D``. [#2102]
+
+  - Removed the deprecated ``grid_mode`` keyword from
+    ``BkgZoomInterpolator``. [#2102]
+
+  - The ``interpolator`` keyword argument for ``Background2D`` is
+    now deprecated. When ``interpolator`` is eventually removed,
+    the ``scipy.ndimage.zoom`` cubic spline interpolator will always be
+    used to resize the low-resolution arrays. The behavior will be
+    identical to the current default. [#2108]
+
+  - The ``BkgIDWInterpolator`` and ``BkgZoomInterpolator`` classes are
+    now deprecated. [#2108]
+
+- ``photutils.psf``
+
+  - Removed the deprecated ``IntegratedGaussianPRF`` and ``PRFAdapter``
+    classes. [#2103]
+
+
+2.3.0 (2025-09-15)
+------------------
+
+General
+^^^^^^^
+
+- The minimum required NumPy is now 1.25. [#2043]
+
+- The minimum required SciPy is now 1.11.1. [#2043]
+
+- The minimum required Matplotlib is now 3.8. [#2043]
+
+- The minimum required scikit-image is now 0.21. [#2043]
+
+New Features
+^^^^^^^^^^^^
+
+- ``photutils.isophote``
+
+  - ``build_ellipse_model`` is now Cythonized and considerably faster.
+    [#2046]
+
+  - ``build_ellipse_model`` also has an additional optional keyword
+    argument ``sma_interval``, which was previously hardcoded. [#2046]
+
+- ``photutils.psf``
+
+  - ``PSFPhotometry`` and ``IterativePSFPhotometry`` now raise an error
+    if the input ``error`` array contains non-finite or zero values.
+    [#2022]
+
+  - ``GriddedPSFModel`` can now be used with a single input ePSF model,
+    which will be equivalent to ``ImagePSF``. [#2034]
+
+  - The ``finder`` callable input to ``PSFPhotometry`` and
+    ``IterativePSFPhotometry`` is no longer restricted to have x and y
+    column names of ``'xcentroid'`` and ``'ycentroid'``. The allowed
+    column names are now the same as those allowed in the
+    ``init_params`` table. [#2072]
+
+  - Added a ``group_warning_threshold`` keyword to ``PSFPhotometry`` and
+    ``IterativePSFPhotometry``. [#2081]
+
+  - The ``PSFPhotometry`` and ``IterativePSFPhotometry`` classes no
+    longer fail for invalid sources, defined as those that have no
+    overlap with the input data, are completely masked, or have too few
+    unmasked pixels for a fit.  These classes have new flags (64, 128,
+    256, respectively) for these invalid conditions. [#2084, #2085]
+
+  - The ``PSFPhotometry`` and ``IterativePSFPhotometry`` classes have
+    new ``results_to_init_params`` and ``results_to_model_params``
+    methods for outputting fit results in different formats. [#2084]
+
+  - When using Astropy 7.0+, the ``PSFPhotometry`` and
+    ``IterativePSFPhotometry`` ``fitter`` object now modifies the PSF
+    model in place instead of creating a copy, improving performance and
+    significantly reducing memory usage in some cases. [#2093]
+
+  - ``PSFPhotometry`` and ``IterativePSFPhotometry`` now return a
+    reduced chi-squared statistic (``reduced_chi2`` column in the
+    results table). [#2086]
+
+  - The PSF photometry classes now use a dynamically generated "flat"
+    model instead of a compound model for grouped sources. This
+    eliminates recursion limits and significantly reduces memory usage
+    for large groups. [#2100]
+
+- ``photutils.segmentation``
+
+  - An optional ``array`` keyword was added to the ``SourceCatalog``
+    ``make_cutouts`` method. [#2023]
+
+  - Added a ``group`` keyword to the ``SegmentationImage``
+    ``to_regions`` method. [#2060, #2065]
+
+  - Added a ``decode_psf_flags`` utility function for decoding PSF
+    photometry bit flags. [#2090]
+
+  - Added a ``PSF_FLAGS`` object to hold all PSF photometry bit flags in
+    one place. PSF_FLAGS provides readable, named constants for each bit
+    flag and helper utilities for decoding bit flags. [#2091]
+
+Bug Fixes
+^^^^^^^^^
+
+- ``photutils.centroids``
+
+  - Fixed an issue with the initial Gaussian theta units in
+    ``centroid_2dg``. [#2013]
+
+  - Fixed a corner-case issue where zero-sum arrays with ndim > 2 input
+    to ``centroid_com`` would return only two np.nan coordinates instead
+    of matching the dimensionality of the input array. [#2045]
+
+- ``photutils.datasets``
+
+  - Fixed a bug in ``make_model_image`` where the output image would not
+    have units in the case where the input params had units and none
+    of the models overlapped the image shape. [#2082]
+
+  - Fixed a bug in ``make_model_image`` where an error would be raised
+    if any row in the input parameters table contained non-finite model
+    parameters. Such sources are now silently ignored. [#2083]
+
+- ``photutils.psf``
+
+  - Fixed a bug in ``fit_2dgaussian`` and ``fit_fwhm`` where the fit
+    would fail if there were NaN values in the input data. [#2030]
+
+  - Fixed the check in ``GriddedPSFModel`` for rectangular pixel grids.
+    [#2035]
+
+  - Fixed a bug in ``PSFPhotometry`` where the ``'group_id'`` column
+    would be ignored if included in the ``init_params`` table. [#2070]
+
+  - Fixed a bug in ``PSFPhotometry`` where the output ``flux_err``
+    column would not have units if the input data had units and the flux
+    model parameter was fixed in value. [#2072]
+
+  - Fixed a bug in ``PSFPhotometry`` and ``IterativePSFPhotometry``
+    where an error would be raised if the x or y columns in
+    ``init_params`` had units. [#2079]
+
+  - Fixed a bug in ``PSFPhotometry`` and ``IterativePSFPhotometry`` for
+    the boundary conditions where flag=2 would be set. [#2080]
+
+  - Fixed a bug in ``EPSFBuilder`` where the output PSF would have the
+    wrong shape if the input ``stars`` were non-square cutouts. [#2089,
+    #2092]
+
+  - Fixed a bug in the calculation of the ``PSFPhotometry`` and
+    ``IterativePSFPhotometry`` ``qfit`` and ``cfit`` to not include the
+    fit weights. [#2099]
+
+- ``photutils.segmentation``
+
+  - Fixed an issue where a newly-defined extra property of a
+    ``SourceCatalog`` with ``overwrite=True`` would not be added to
+    the ``extra_properties`` attribute. [#2039]
+
+  - Fixed an issue where the ``SegmentationImage`` ``segments``
+    attribute would fail if any source segment was non-contiguous.
+    [#2060]
+
+API Changes
+^^^^^^^^^^^
+
+- ``photutils.background``
+
+  - An explicit ``ValueError`` is now raised if the input ``data`` to
+    ``Background2D`` contains all non-finite values. [#2062]
+
+- ``photutils.psf``
+
+  - The ``GriddedPSFModel`` ``data`` and ``grid_xypos`` attributes are
+    now read-only. [#2036]
+
+  - The ``PSFPhotometry`` ``fit_param`` attribute is now deprecated. Use
+    the new ``results_to_init_params`` method instead. [#2084]
+
+  - The deprecated ``PSFPhotometry`` ``fit_results`` attribute has been
+    removed. [#2084]
+
+- ``photutils.segmentation``
+
+  - The ``SegmentationImage`` ``polygons`` list may now include either
+    Shapely ``Polygon`` or ``MultiPolygon`` (non-contiguous) objects.
+    [#2060]
+
+  - The ``SegmentationImage`` ``to_patches`` and ``plot_patches``
+    methods now return ``matplotlib.patches.PathPatch`` objects. [#2060]
+
+  - The ``SegmentationImage`` ``to_regions`` method now returns
+    ``PolygonPixelRegion`` regions that have the segment label stored in
+    the object ``meta`` dictionary. [#2060]
+
+
+2.2.0 (2025-02-18)
+------------------
+
+New Features
+^^^^^^^^^^^^
+
+- ``photutils.aperture``
+
+  - Add an ``aperture_to_region`` function to convert an Aperture object
+    to an astropy ``Region`` or ``Regions`` object. [#2009]
+
+- ``photutils.profiles``
+
+  - Added ``data_radius`` and ``data_profile`` attributes to the
+    ``RadialProfile`` class for calculating the raw radial profile.
+    [#2001]
+
+- ``photutils.segmentation``
+
+  - Added a ``to_regions`` method to ``SegmentationImage`` that converts
+    the segment outlines to a ``regions.Regions`` object. [#2010]
+
+Bug Fixes
+^^^^^^^^^
+
+- ``photutils.segmentation``
+
+  - Fixed an issue where the ``SegmentationImage`` ``polygons``
+    attribute would raise an error if any source segment contained a
+    hole. [#2005]
+
+API Changes
+^^^^^^^^^^^
+
+- ``photutils.aperture``
+
+  - The ``theta`` attribute of ``EllipticalAperture``,
+    ``EllipticalAnnulus``, ``RectangularAperture``, and
+    ``RectangularAnnulus`` is now always returned as an angular
+    ``Quantity``. [#2008]
+
+
+2.1.0 (2025-01-06)
+------------------
+
+General
+^^^^^^^
+
+- The minimum required Python is now 3.11. [#1958]
+
+- The minimum required gwcs is now 0.20. [#1961]
+
+New Features
+^^^^^^^^^^^^
+
+- ``photutils.aperture``
+
+  - The ``aperture_photometry`` output table will now include a
+    ``sky_center`` column if ``wcs`` is input, even if the input aperture
+    is not a sky aperture. [#1965]
+
+- ``photutils.datasets``
+
+  - A ``params_map`` keyword was added to ``make_model_image`` to allow
+    a custom mapping between model parameter names and column names in
+    the parameter table. [#1994]
+
+- ``photutils.detection``
+
+  - The ``find_peaks`` ``border_width`` keyword can now accept two
+    values, indicating the border width along the y and x edges,
+    respectively. [#1957]
+
+- ``photutils.morphology``
+
+  - An optional ``mask`` keyword was added to the ``gini`` function.
+    [#1979]
+
+- ``photutils.segmentation``
+
+  - Added ``deblended_labels``, ``deblended_labels_map``, and
+    ``deblended_labels_inverse_map`` properties to ``SegmentationImage``
+    to identify and map any deblended labels. [#1988]
+
+Bug Fixes
+^^^^^^^^^
+
+- ``photutils.segmentation``
+
+  - Fixed a bug where the table output from the ``SourceCatalog``
+    ``to_table`` method could have column names with a ``np.str_``
+    representation instead of ``str`` representation when using NumPy
+    2.0+. [#1956]
+
+  - Fixed a bug to ensure that the dtype of the ``SegmentationImage``
+    ``labels`` always matches the image dtype. [#1986]
+
+  - Fixed an issue with the source labels after source deblending when
+    using ``relabel=False``. [#1988]
+
+API Changes
+^^^^^^^^^^^
+
+- ``photutils.aperture``
+
+  - The ``xcenter`` and ``ycenter`` columns in the table returned by
+    ``aperture_photometry`` no longer have (pixel) units for consistency
+    with other tools. [#1993]
+
+- ``photutils.detection``
+
+  - When ``exclude_border`` is set to ``True`` in the ``DAOStarFinder``
+    and ``StarFinder`` classes, the excluded border region can be
+    different along the x and y edges if the kernel shape is rectangular.
+    [#1957]
+
+  - Detected sources that match interval ends for sharpness, roundness, and
+    maximum peak values (``sharplo``, ``sharphi``, ``roundlo``, ``roundhi``,
+    and ``peakmax``) are now included in the returned table of detected
+    sources by ``DAOStarFinder`` and ``IRAFStarFinder``. [#1978]
+
+  - Detected sources that match the maximum peak value (``peakmax``)
+    are now included in the returned table of detected sources by
+    ``StarFinder``. [#1990]
+
+- ``photutils.morphology``
+
+  - The ``gini`` function now returns zero instead of NaN if the
+    (unmasked) data values sum to zero. [#1979]
+
+- ``photutils.psf``
+
+  - The ``'viridis'`` color map is now the default in the
+    ``GriddedPSFModel`` ``plot_grid`` method when ``deltas=True``.
+    [#1954]
+
+  - The ``GriddedPSFModel`` ``plot_grid`` color bar now matches the
+    height of the displayed image. [#1955]
+
+
+2.0.2 (2024-10-24)
+------------------
+
+Bug Fixes
+^^^^^^^^^
+
+- Due to an upstream bug in ``bottleneck`` with ``float32`` arrays,
+  ``bottleneck`` nan-functions are now used internally only for
+  ``float64`` arrays. Performance may be impacted for computations
+  involving arrays with dtype other than ``float64``. Affected functions
+  are used in the ``aperture``, ``background``, ``detection``,
+  ``profiles``, ``psf``, and ``segmentation`` subpackages. This change
+  has no impact if ``bottleneck`` is not installed.
+
+- ``photutils.background``
+
+  - Fixed a bug in ``Background2D`` where an error would be raised
+    when using the ``BkgIDWInterpolator`` interpolator when any mesh was
+    excluded, e.g., due to an input mask. [#1940]
+
+- ``photutils.detection``
+
+  - Fixed a bug in the star finders (``DAOStarFinder``,
+    ``IRAFStarFinder``, and ``StarFinder``) when
+    ``exclude_border=True``. Also, fixed an issue with
+    ``exclude_border=True`` where if all sources were in the border
+    region then an error would be raised. [#1943]
+
+
+2.0.1 (2024-10-16)
+------------------
+
+Bug Fixes
+^^^^^^^^^
+
+- ``photutils.background``
+
+  - Fixed a bug in ``SExtractorBackground`` where the dimensionality of
+    the returned value would not be preserved if the output was a single
+    value. [#1934]
+
+  - Fixed an issue in ``Background2D`` where if the ``box_size`` equals
+    the input array shape the input data array could be modified. [#1935]
+
+
+2.0.0 (2024-10-14)
 ------------------
 
 General
@@ -75,11 +479,12 @@ New Features
 
   - Added new ``GaussianPSF``, ``CircularGaussianPSF``, ``GaussianPRF``,
     ``CircularGaussianPRF``, and ``MoffatPSF`` PSF model classes.
-    [#1838, #1898]
+    [#1838, #1898, #1918]
 
-  - Added new ``AiryDiskPSF`` PSF model class. [#1843]
+  - Added new ``AiryDiskPSF`` PSF model class. [#1843, #1918]
 
-  - Added new ``CircularGaussianSigmaPRF`` PSF model class. [#1845]
+  - Added new ``CircularGaussianSigmaPRF`` PSF model class. [#1845,
+    #1918]
 
   - The ``IntegratedGaussianPRF`` model now supports units. [#1838]
 
@@ -88,7 +493,7 @@ New Features
 
   - Added new ``fit_fwhm`` convenience function to estimate the FWHM of
     one or more sources in an image by fitting a circular 2D Gaussian PSF
-    model. [#1859, #1887, #1899]
+    model. [#1859, #1887, #1899, #1918]
 
   - Added new ``fit_2dgaussian`` convenience function to fit a circular
     2D Gaussian PSF to one or more sources in an image. [#1859, #1887,
@@ -104,6 +509,16 @@ New Features
     improve its performance. In typical PSF photometry use cases, it is
     now about 4 times faster than previous versions. [#1903]
 
+- ``photutils.segmentation``
+
+  - Reduced the memory usage and improved the performance of source
+    deblending with ``deblend_sources`` and ``SourceFinder``. [#1924,
+    #1925, #1926]
+
+  - Improved the accuracy of the progress bar in ``deblend_sources`` and
+    ``SourceFinder`` when using multiprocessing. Also added the source
+    ID label number to the progress bar. [#1925, #1926]
+
 Bug Fixes
 ^^^^^^^^^
 
@@ -111,6 +526,12 @@ Bug Fixes
 
   - Fixed a bug checking that the ``subpixels`` keyword is a strictly
     positive integer. [#1816]
+
+- ``photutils.datasets``
+
+  - Fixed an issue in ``make_model_image`` where if the ``bbox_factor``
+    was input and the model bounding box did not have a ``factor`` keyword
+    then an error would be raised. [#1921]
 
 - ``photutils.detection``
 
@@ -161,6 +582,10 @@ API Changes
     When ``grid_mode`` is eventually removed, the `True` option will
     always be used. [#1870]
 
+  - The ``Background2D`` ``background``, ``background_rms``,
+    ``background_mesh``, and ``background_rms_mesh`` properties now have
+    the same ``dtype`` as the input data. [#1922]
+
 - ``photutils.centroids``
 
   - For consistency with other fitting functions (including PSF
@@ -170,9 +595,9 @@ API Changes
     background-subtracted. [#1861]
 
   - The fitter used in ``centroid_1dg`` and ``centroid_2dg`` was changed
-    from ``LevMarLSQFitter`` to ``LMLSQFitter``. ``LevMarLSQFitter`` uses
+    from ``LevMarLSQFitter`` to ``TRFLSQFitter``. ``LevMarLSQFitter`` uses
     the legacy SciPy function ``scipy.optimize.leastsq``, which is no
-    longer recommended. [#1899]
+    longer recommended. [#1917]
 
 - ``photutils.datasets``
 
@@ -250,6 +675,12 @@ API Changes
     the legacy SciPy function ``scipy.optimize.leastsq``, which is no
     longer recommended. [#1899]
 
+  - ``psf_shape`` is now an optional keyword in the ``make_model_image``
+    and ``make_residual_image`` methods of ``PSFPhotometry`` and
+    ``IterativePSFPhotometry``. The value defaults to using the model
+    bounding box to define the shape and is required only if the PSF
+    model does not have a bounding box attribute. [#1921]
+
 - ``photutils.psf.matching``
 
   - PSF matching tools must now be imported from
@@ -257,9 +688,11 @@ API Changes
 
 - ``photutils.segmentation``
 
-  - The ``SegmentationImage`` ``relabel_consecutive`` method now keeps
-    the original dtype of the segmentation image instead of always
-    changing it to ``int`` (``int64``). [#1878]
+  - The ``SegmentationImage`` ``relabel_consecutive``,
+    ``resassign_label(s)``, ``keep_label(s)``, ``remove_label(s)``,
+    ``remove_border_labels``, and ``remove_masked_labels`` methods now
+    keep the original dtype of the segmentation image instead of always
+    changing it to ``int`` (``int64``). [#1878, #1923]
 
   - The ``detect_sources`` and ``deblend_sources`` functions now return
     a ``SegmentationImage`` instance whose data dtype is ``np.int32``

@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines gridded PSF models.
+Define gridded PSF models.
 """
 
 import copy
@@ -46,32 +46,30 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
         A `~astropy.nddata.NDData` object containing the grid of
         reference ePSF arrays. The data attribute must contain a 3D
         `~numpy.ndarray` containing a stack of the 2D ePSFs with a shape
-        of ``(N_psf, ePSF_ny, ePSF_nx)``. The length of the x and y axes
-        must both be at least 4. All elements of the input image data
-        must be finite. The PSF peak is assumed to be located at the
-        center of the input image. The array must be normalized so that
-        the total flux of a source is 1.0. This means that the sum of
-        the values in the input image PSF over an infinite grid is 1.0.
-        In practice, the sum of the data values in the input image may
-        be less than 1.0 if the input image only covers a finite region
-        of the PSF. These correction factors can be estimated from the
-        ensquared or encircled energy of the PSF based on the size of
-        the input image.
+        of ``(N_psf, ePSF_ny, ePSF_nx)``. The length of the x and y
+        axes must both be at least 4. ``N_psf`` must not be 2 or 3. All
+        elements of the input image data must be finite. The PSF peak is
+        assumed to be located at the center of the input image. Please
+        see the Notes section below for details on the normalization of
+        the input image data.
+
+        If ``N_psf`` is 1, the model will be evaluated using the single
+        ePSF image at every (x, y) position. This is equivalent to using
+        the `~photutils.psf.ImagePSF` model with the single ePSF.
 
         The meta attribute must be dictionary containing the following:
 
-            * ``'grid_xypos'``: A list of the (x, y) grid positions of
-              each reference ePSF. The order of positions should
-              match the first axis of the 3D `~numpy.ndarray` of
-              ePSFs. In other words, ``grid_xypos[i]`` should be
-              the (x, y) position of the reference ePSF defined in
-              ``nddata.data[i]``. The grid positions must form a
-              rectangular grid.
+        * ``'grid_xypos'``: A list of the (x, y) grid positions of
+          each reference ePSF. The order of positions should match the
+          first axis of the 3D `~numpy.ndarray` of ePSFs. In other words,
+          ``grid_xypos[i]`` should be the (x, y) position of the reference
+          ePSF defined in ``nddata.data[i]``. The grid positions must form
+          a rectangular grid.
 
-            * ``'oversampling'``: The integer oversampling factor(s) of
-              the input ePSF images. If ``oversampling`` is a scalar then
-              it will be used for both axes. If ``oversampling`` has two
-              elements, they must be in ``(y, x)`` order.
+        * ``'oversampling'``: The integer oversampling factor(s) of the
+          input ePSF images. If ``oversampling`` is a scalar then it will
+          be used for both axes. If ``oversampling`` has two elements,
+          they must be in ``(y, x)`` order.
 
         The meta attribute may contain other properties such as the
         telescope, instrument, detector, and filter of the ePSF.
@@ -99,6 +97,23 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
 
     Notes
     -----
+    The fitted PSF model flux represents the total flux of the source,
+    assuming the input image was properly normalized. This flux is
+    determined as a multiplicative scale factor applied to the input
+    image PSF, after accounting for any oversampling. Theoretically,
+    the sum of all values in the PSF image over an infinite grid should
+    equal 1.0 (assuming no oversampling). However, when the PSF is
+    represented over a finite region, the sum of the values may be less
+    than 1.0. For oversampled PSF images, the normalization should be
+    adjusted so that the sum of the array values equals the product
+    of the oversampling factors (e.g., oversampling squared if the
+    oversampling is the same along both axes). If the input image only
+    covers a finite region of the PSF, the sum may again be less than
+    the product of the oversampling factors. Correction factors based on
+    the encircled or ensquared energy of the PSF can be used to estimate
+    the proper scaling for the finite region of the input PSF image and
+    ensure correct flux normalization.
+
     Internally, the grid of ePSFs will be arranged and stored such that
     it is sorted first by the y reference pixel coordinate and then by
     the x reference pixel coordinate.
@@ -116,7 +131,7 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
     def __init__(self, nddata, *, flux=flux.default, x_0=x_0.default,
                  y_0=y_0.default, fill_value=0.0):
 
-        self.data, self.grid_xypos = self._define_grid(nddata)
+        self._data, self._grid_xypos = self._define_grid(nddata)
         self._meta = nddata.meta.copy()  # _meta to avoid the meta descriptor
         self._oversampling = as_pair('oversampling',
                                      nddata.meta['oversampling'],
@@ -150,32 +165,44 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
             data contains NaNs or infs.
         """
         if not isinstance(data, NDData):
-            raise TypeError('data must be an NDData instance.')
+            msg = 'data must be an NDData instance'
+            raise TypeError(msg)
 
         if data.data.ndim != 3:
-            raise ValueError('The NDData data attribute must be a 3D numpy '
-                             'ndarray')
+            msg = 'The NDData data attribute must be a 3D numpy ndarray'
+            raise ValueError(msg)
 
         if not np.all(np.isfinite(data.data)):
-            raise ValueError('All elements of input data must be finite.')
+            msg = 'All elements of input data must be finite'
+            raise ValueError(msg)
+
+        if data.data.shape[0] in (2, 3):
+            msg = 'The number of ePSFs must not be 2 or 3'
+            raise ValueError(msg)
 
         # this is required by RectBivariateSpline for kx=3, ky=3
         if np.any(np.array(data.data.shape[1:]) < 4):
-            raise ValueError('The length of the PSF x and y axes must both '
-                             'be at least 4.')
+            msg = ('The length of the PSF x and y axes must both be at '
+                   'least 4')
+            raise ValueError(msg)
 
         if 'oversampling' not in data.meta:
-            raise ValueError('"oversampling" must be in the nddata meta '
-                             'dictionary.')
+            msg = '"oversampling" must be in the nddata meta dictionary'
+            raise ValueError(msg)
 
     @staticmethod
     def _is_rectangular_grid(grid_xypos):
         """
-        Check if the input ``grid_xypos`` forms a rectangular grid.
+        Determine if the given (x, y) pixel positions form an axis-
+        aligned rectangular grid.
+
+        Spacing does not need to be uniform along x or y, but there must
+        be at least two unique x and y values, and all combinations of x
+        and y must be present.
 
         Parameters
         ----------
-        grid_xypos : array of (x, y) pairs
+        grid_xypos : (N, 2) array of (x, y) pairs
             The fiducial (x, y) positions of the ePSFs.
 
         Returns
@@ -184,11 +211,17 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
             Returns `True` if the input ``grid_xypos`` forms a
             rectangular grid.
         """
-        xgrid = np.unique(grid_xypos[:, 0])  # sorted
-        ygrid = np.unique(grid_xypos[:, 1])  # sorted
-        expected_points = {(x, y) for x in xgrid for y in ygrid}
-        grid = set(map(tuple, grid_xypos))
-        return grid == expected_points
+        if len(grid_xypos) < 4:  # pragma: no cover
+            return False
+
+        x_vals = np.unique(grid_xypos[:, 0])  # sorted
+        y_vals = np.unique(grid_xypos[:, 1])  # sorted
+        # Must have at least 2 unique x and y values to form a 2D grid
+        if len(x_vals) < 2 or len(y_vals) < 2:
+            return False
+
+        expected_points = {(x, y) for x in x_vals for y in y_vals}
+        return set(map(tuple, grid_xypos)) == expected_points
 
     def _validate_grid(self, data):
         """
@@ -207,15 +240,17 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
         try:
             grid_xypos = np.array(data.meta['grid_xypos'])
         except KeyError as exc:
-            raise ValueError('"grid_xypos" must be in the nddata meta '
-                             'dictionary.') from exc
+            msg = '"grid_xypos" must be in the nddata meta dictionary'
+            raise ValueError(msg) from exc
 
         if len(grid_xypos) != data.data.shape[0]:
-            raise ValueError('The length of grid_xypos must match the number '
-                             'of input ePSFs.')
+            msg = ('The length of grid_xypos must match the number of '
+                   'input ePSFs')
+            raise ValueError(msg)
 
-        if not self._is_rectangular_grid(grid_xypos):
-            raise ValueError('grid_xypos must form a rectangular grid.')
+        if len(grid_xypos) != 1 and not self._is_rectangular_grid(grid_xypos):
+            msg = 'grid_xypos must form a rectangular grid'
+            raise ValueError(msg)
 
     def _define_grid(self, nddata):
         """
@@ -260,6 +295,28 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
 
     def __str__(self):
         return self._format_str(keywords=self._cls_info())
+
+    @property
+    def data(self):
+        """
+        The 3D array of ePSFs.
+
+        The shape is ``(N_psf, ePSF_ny, ePSF_nx)``.
+        """
+        return self._data
+
+    @property
+    def grid_xypos(self):
+        """
+        The (x, y) positions of the ePSFs.
+
+        The order of positions should match the first axis of the 3D
+        `~numpy.ndarray` of ePSFs. In other words, ``grid_xypos[i]``
+        should be the (x, y) position of the reference ePSF defined in
+        ``nddata.data[i]``. The grid positions must form a rectangular
+        grid.
+        """
+        return self._grid_xypos
 
     def copy(self):
         """
@@ -405,16 +462,29 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
 
         The resulting interpolator is cached in the `_interpolator`
         dictionary for reuse.
+
+        Parameters
+        ----------
+        grid_idx : int
+            The index of the ePSF image in the reference grid.
+
+        Returns
+        -------
+        interp : `~scipy.interpolate.RectBivariateSpline`
+            The interpolator for the input ePSF image.
         """
-        xypos = tuple(self.grid_xypos[grid_idx])
-        if xypos in self._interpolator:
-            return self._interpolator[xypos]
+        # check if the interpolator is already cached
+        if grid_idx in self._interpolator:
+            return self._interpolator[grid_idx]
 
         # RectBivariateSpline expects the data to be in (x, y) axis order
         data = self.data[grid_idx]
         interp = RectBivariateSpline(*self._interp_xyidx, data.T, kx=3, ky=3,
                                      s=0)
-        self._interpolator[xypos] = interp
+
+        # cache the interpolator for reuse
+        self._interpolator[grid_idx] = interp
+
         return interp
 
     def _find_bounding_points(self, x, y):
@@ -554,7 +624,8 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
             The evaluated model.
         """
         if x.ndim > 2:
-            raise ValueError('x and y must be 1D or 2D.')
+            msg = 'x and y must be 1D or 2D'
+            raise ValueError(msg)
 
         # the base Model.__call__() method converts scalar inputs to
         # size-1 arrays before calling evaluate(), but we need scalar
@@ -571,7 +642,13 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
         xi += self.origin[0]
         yi += self.origin[1]
 
-        evaluated_model = flux * self._calc_model_values(x_0, y_0, xi, yi)
+        if self.data.shape[0] == 1:
+            # if there is only one ePSF, we do not need to perform
+            # the bilinear interpolation
+            evaluated_model = flux * self._calc_interpolator(0)(xi, yi,
+                                                                grid=False)
+        else:
+            evaluated_model = flux * self._calc_model_values(x_0, y_0, xi, yi)
 
         if self.fill_value is not None:
             # set pixels that are outside the input pixel grid to the

@@ -44,25 +44,32 @@ def test_model():
     assert data.shape == model.shape
 
     residual = data - model
-    assert np.mean(residual) <= 5.0
-    assert np.mean(residual) >= -5.0
+    assert np.abs(np.mean(residual)) <= 5.0
 
 
-def test_model_simulated_data():
+@pytest.mark.parametrize('sma_interval', [0.05, 0.1])
+def test_model_simulated_data(sma_interval):
     data = make_test_image(nx=200, ny=200, i0=10.0, sma=5.0, eps=0.5,
                            pa=np.pi / 3.0, noise=0.05, seed=0)
 
     g = EllipseGeometry(100.0, 100.0, 5.0, 0.5, np.pi / 3.0)
     ellipse = Ellipse(data, geometry=g, threshold=1.0e5)
-    isophote_list = ellipse.fit_image()
+
+    # Catch warnings that may arise from empty slices. This started
+    # to happen on windows with scipy 1.15.0.
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        isophote_list = ellipse.fit_image()
+
     model = build_ellipse_model(data.shape, isophote_list,
-                                fill=np.mean(data[0:50, 0:50]))
+                                fill=np.mean(data[0:50, 0:50]),
+                                sma_interval=sma_interval)
 
     assert data.shape == model.shape
 
     residual = data - model
-    assert np.mean(residual) <= 5.0
-    assert np.mean(residual) >= -5.0
+    assert np.abs(np.mean(residual)) <= 0.01
+    assert np.abs(np.median(residual)) <= 0.01
 
 
 def test_model_minimum_radius():

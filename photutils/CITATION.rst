@@ -19,13 +19,13 @@ appropriate.
 BibTex files for all Photutils versions can be found at
 https://doi.org/10.5281/zenodo.596036.
 
-For example, for Photutils v1.13.0, one should
-cite Bradley et al. 2024 with the BibTeX entry
-(https://zenodo.org/records/12585239/export/bibtex):
+For example, for Photutils v2.2.0, one should
+cite Bradley et al. 2025 with the BibTeX entry
+(https://zenodo.org/records/14889440/export/bibtex):
 
 .. code-block:: text
 
-    @software{larry_bradley_2024_12585239,
+    @software{larry_bradley_2025_14889440,
       author       = {Larry Bradley and
                       Brigitta Sip{\H o}cz and
                       Thomas Robitaille and
@@ -53,13 +53,18 @@ cite Bradley et al. 2024 with the BibTeX entry
                       Sergio Pascual and
                       Shivangee Rathi and
                       Marshall Perrin and
-                      Brett M. Morris and
-                      Gabriel Perren},
-      title        = {astropy/photutils: 1.13.0},
-      month        = jun,
-      year         = 2024,
+                      Brett M. Morris},
+      title        = {astropy/photutils: 2.2.0},
+      month        = feb,
+      year         = 2025,
       publisher    = {Zenodo},
-      version      = {1.13.0},
-      doi          = {10.5281/zenodo.12585239},
-      url          = {https://doi.org/10.5281/zenodo.12585239
+      version      = {2.2.0},
+      doi          = {10.5281/zenodo.14889440},
+      url          = {https://doi.org/10.5281/zenodo.14889440},
+      swhid        = {swh:1:dir:11159107f27a28985192ed1118b1f2055709d093
+                       ;origin=https://doi.org/10.5281/zenodo.596036;visi
+                       t=swh:1:snp:ae8c4a55d349d43e53cfe9ce92e678fcfe840f
+                       3b;anchor=swh:1:rel:0117f67e8888adcdfc85308287dd9c
+                       854b466389;path=astropy-photutils-ffb96c5
+                      },
     }

@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines tools to plot Gridded PSF models.
+Define tools to plot Gridded PSF models.
 """
 
 import astropy
@@ -39,7 +39,7 @@ class ModelGridPlotMixin:
         return data.transpose([0, 2, 1, 3]).reshape(nypsfs * ny, nxpsfs * nx)
 
     def plot_grid(self, *, ax=None, vmax_scale=None, peak_norm=False,
-                  deltas=False, cmap=None, dividers=True,
+                  deltas=False, cmap='viridis', dividers=True,
                   divider_color='darkgray', divider_ls='-', figsize=None):
         """
         Plot the grid of ePSF models.
@@ -68,10 +68,7 @@ class ModelGridPlotMixin:
             and the average ePSF.
 
         cmap : str or `matplotlib.colors.Colormap`, optional
-            The colormap to use. The default is `None`, which uses
-            the 'viridis' colormap for plotting ePSF data and the
-            'gray_r' colormap for plotting the ePSF difference data
-            (``deltas=True``).
+            The colormap to use. The default is 'viridis'.
 
         dividers : bool, optional
             Whether to show divider lines between the ePSFs.
@@ -105,7 +102,7 @@ class ModelGridPlotMixin:
         the function call to suppress the display of the return value.
         """
         import matplotlib.pyplot as plt
-        from matplotlib import cm
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
 
         data = self.data.copy()
         if deltas:
@@ -132,26 +129,20 @@ class ModelGridPlotMixin:
             data /= data.max()
 
         if deltas:
-            if cmap is None:
-                cmap = cm.gray_r.copy()
-
             if vmax_scale is None:
                 vmax_scale = 0.03
             vmax = data.max() * vmax_scale
             vmin = -vmax
-            if minversion(astropy, '6.1.dev'):
+            if minversion(astropy, '6.1'):
                 norm = simple_norm(data, 'linear', vmin=vmin, vmax=vmax)
             else:
                 norm = simple_norm(data, 'linear', min_cut=vmin, max_cut=vmax)
         else:
-            if cmap is None:
-                cmap = cm.viridis.copy()
-
             if vmax_scale is None:
                 vmax_scale = 1.0
             vmax = data.max() * vmax_scale
             vmin = vmax / 1.0e4
-            if minversion(astropy, '6.1.dev'):
+            if minversion(astropy, '6.1'):
                 norm = simple_norm(data, 'log', vmin=vmin, vmax=vmax,
                                    log_a=1.0e4)
             else:
@@ -166,7 +157,8 @@ class ModelGridPlotMixin:
         nxpsfs = self._xgrid.shape[0]
         extent = [-0.5, nxpsfs - 0.5, -0.5, nypsfs - 0.5]
 
-        ax.imshow(data, extent=extent, norm=norm, cmap=cmap, origin='lower')
+        axim = ax.imshow(data, extent=extent, norm=norm, cmap=cmap,
+                         origin='lower')
 
         # Use the axes set up above to set appropriate tick labels
         xticklabels = self._xgrid.astype(int)
@@ -182,9 +174,9 @@ class ModelGridPlotMixin:
         ax.set_ylabel('ePSF location in detector Y pixels')
 
         if dividers:
-            for ix in range(nxpsfs):
+            for ix in range(nxpsfs - 1):
                 ax.axvline(ix + 0.5, color=divider_color, ls=divider_ls)
-            for iy in range(nypsfs):
+            for iy in range(nypsfs - 1):
                 ax.axhline(iy + 0.5, color=divider_color, ls=divider_ls)
 
         instrument = self.meta.get('instrument', '')
@@ -221,7 +213,10 @@ class ModelGridPlotMixin:
             else:
                 label = 'ePSF flux per pixel'
 
-        cbar = plt.colorbar(label=label, mappable=ax.images[0])
+        divider = make_axes_locatable(ax)
+        cax_cbar = divider.append_axes('right', size='3%', pad='3%')
+        cbar = fig.colorbar(axim, cax=cax_cbar, label=label)
+
         if not deltas:
             cbar.ax.set_yscale('log')
 

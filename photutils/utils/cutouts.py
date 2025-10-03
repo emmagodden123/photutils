@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for generating 2D image cutouts.
+Define tools for generating 2D image cutouts.
 """
 
 import numpy as np
@@ -21,7 +21,8 @@ def _overlap_slices(large_array_shape, small_array_shape, position,
     # fix for https://github.com/astropy/astropy/pull/16544
     for i in (0, 1):
         if slc_lg[i].stop - slc_lg[i].start == 0:
-            raise NoOverlapError('Arrays do not overlap.')
+            msg = 'Arrays do not overlap'
+            raise NoOverlapError(msg)
 
     return slc_lg, slc_sm
 
@@ -73,6 +74,12 @@ class CutoutImage:
         If `False` (default), then the cutout data will be a view into
         the original ``data`` array. If `True`, then the cutout data
         will hold a copy of the original ``data`` array.
+
+    Notes
+    -----
+    If the cutout array is not fully contained within the input ``data``
+    array and ``mode='partial'`` with ``fill_value=np.nan``, then the
+    input ``data`` must have a float data type.
 
     Examples
     --------

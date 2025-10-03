@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides Quantity helper tools.
+Define Quantity helper tools.
 """
 
 import astropy.units as u
@@ -40,8 +40,8 @@ def process_quantities(values, names):
         If the input values do not all have the same units.
     """
     if len(values) != len(names):
-        raise ValueError('The number of values must match the number of '
-                         'names.')
+        msg = 'The number of values must match the number of names.'
+        raise ValueError(msg)
 
     all_units = {name: getattr(arr, 'unit', None)
                  for arr, name in zip(values, names, strict=True)

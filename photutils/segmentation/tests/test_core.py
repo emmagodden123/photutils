@@ -12,7 +12,7 @@ from numpy.testing import assert_allclose, assert_equal
 from photutils.segmentation.core import Segment, SegmentationImage
 from photutils.utils import circular_footprint
 from photutils.utils._optional_deps import (HAS_MATPLOTLIB, HAS_RASTERIO,
-                                            HAS_SHAPELY)
+                                            HAS_REGIONS, HAS_SHAPELY)
 
 
 class TestSegmentationImage:
@@ -309,6 +309,12 @@ class TestSegmentationImage:
         segm.remove_labels(labels=[5, 3])
         assert_allclose(segm.data, ref_data)
 
+        dtype = np.int32
+        data2 = ref_data.copy().astype(dtype)
+        segm2 = SegmentationImage(data2)
+        segm2.remove_label(1)
+        assert segm2.data.dtype == dtype
+
     def test_remove_labels_relabel(self):
         ref_data = np.array([[1, 1, 0, 0, 2, 2],
                              [0, 0, 0, 0, 0, 2],
@@ -442,12 +448,56 @@ class TestSegmentationImage:
 
     @pytest.mark.skipif(not HAS_RASTERIO, reason='rasterio is required')
     @pytest.mark.skipif(not HAS_SHAPELY, reason='shapely is required')
+    def test_polygon_hole(self):
+
+        data = np.zeros((11, 11), dtype=int)
+        data[3:8, 3:8] = 10
+        data[5, 5] = 0  # hole
+        segm = SegmentationImage(data)
+        polygons = segm.polygons
+        assert len(polygons) == 1
+        verts = np.array(polygons[0].exterior.coords)
+        expected_verts = np.array([[2.5, 2.5], [2.5, 7.5], [7.5, 7.5],
+                                   [7.5, 2.5], [2.5, 2.5]])
+        assert_equal(verts, expected_verts)
+
+    @pytest.mark.skipif(not HAS_RASTERIO, reason='rasterio is required')
+    @pytest.mark.skipif(not HAS_REGIONS, reason='regions is required')
+    @pytest.mark.skipif(not HAS_SHAPELY, reason='shapely is required')
+    def test_regions(self):
+        from regions import PolygonPixelRegion, Regions
+        regions = self.segm.to_regions()
+
+        assert isinstance(regions, Regions)
+        assert isinstance(regions[0], PolygonPixelRegion)
+        assert len(regions) == self.segm.nlabels
+
+        segm = self.segm.copy()
+        segm.reassign_labels(labels=4, new_label=1)
+        regions = segm.to_regions(group=True)
+        assert isinstance(regions, list)
+        assert isinstance(regions[0], Regions)
+        assert isinstance(regions[1], PolygonPixelRegion)
+
+        data = np.zeros((5, 5), dtype=int)
+        data[2, 2] = 10
+        segm = SegmentationImage(data)
+        regions = segm.to_regions()
+        assert len(regions) == 1
+        verts = regions[0].vertices
+        expected_xverts = np.array([1.5, 1.5, 2.5, 2.5])
+        expected_yverts = np.array([1.5, 2.5, 2.5, 1.5])
+        assert_equal(verts.x, expected_xverts)
+        assert_equal(verts.y, expected_yverts)
+
+    @pytest.mark.skipif(not HAS_RASTERIO, reason='rasterio is required')
+    @pytest.mark.skipif(not HAS_SHAPELY, reason='shapely is required')
     @pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib is required')
     def test_patches(self):
-        from matplotlib.patches import Polygon
+        from matplotlib.patches import PathPatch
 
         patches = self.segm.to_patches(edgecolor='blue')
-        assert isinstance(patches[0], Polygon)
+        assert isinstance(patches[0], PathPatch)
         assert patches[0].get_edgecolor() == (0, 0, 1, 1)
 
         scale = 2.0
@@ -458,18 +508,182 @@ class TestSegmentationImage:
         assert_allclose(v2, v3)
 
         patches = self.segm.plot_patches(edgecolor='red')
-        assert isinstance(patches[0], Polygon)
+        assert isinstance(patches[0], PathPatch)
         assert patches[0].get_edgecolor() == (1, 0, 0, 1)
 
         patches = self.segm.plot_patches(labels=1)
         assert len(patches) == 1
         assert isinstance(patches, list)
-        assert isinstance(patches[0], Polygon)
+        assert isinstance(patches[0], PathPatch)
 
         patches = self.segm.plot_patches(labels=(4, 7))
         assert len(patches) == 2
         assert isinstance(patches, list)
-        assert isinstance(patches[0], Polygon)
+        assert isinstance(patches[0], PathPatch)
+
+    @pytest.mark.skipif(not HAS_RASTERIO, reason='rasterio is required')
+    @pytest.mark.skipif(not HAS_SHAPELY, reason='shapely is required')
+    @pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib is required')
+    def test_patches_corners(self):
+        """
+        Regression test for a bug where patches were not generated for
+        "invalid" Shapely polygons.
+
+        This occurs when two pixels within a segment intersect only at a
+        corner.
+        """
+        data = np.zeros((10, 10), dtype=np.uint32)
+        data[5, 5] = 1
+        data[4, 4] = 1
+        data[3, 3] = 1
+        segm = SegmentationImage(data)
+        assert segm.nlabels == 1
+        assert len(segm.segments) == 1
+        assert len(segm.polygons) == 1
+        assert len(segm.to_patches()) == 1
+        assert len(segm.to_regions()) == 1
+
+    @pytest.mark.skipif(not HAS_RASTERIO, reason='rasterio is required')
+    @pytest.mark.skipif(not HAS_SHAPELY, reason='shapely is required')
+    @pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib is required')
+    def test_polygons_complex(self):
+        """
+        Test polygons, patches, and regions for segments that have holes
+        and/or are non-contiguous.
+        """
+        from matplotlib.patches import PathPatch
+        from regions import PolygonPixelRegion, Regions
+        from shapely.geometry import MultiPolygon, Polygon
+
+        image = np.zeros((150, 150), dtype=np.uint32)
+
+        # polygon with one hole
+        image[10:90, 10:90] = 1
+        image[30:70, 30:70] = 0
+
+        # simple Polygon
+        image[15:25, 110:140] = 2
+        image[25:55, 110:120] = 2
+
+        # MultiPolygon
+        image[100:120, 20:40] = 3
+        image[105:120, 45:55] = 3
+        image[114:130, 60:80] = 3
+
+        # single polygon with multiple holes
+        image[85:145, 95:145] = 4
+        image[105:115, 105:115] = 0
+        image[125:135, 125:138] = 0
+        image[120:125, 100:120] = 0
+
+        # simple Polygon
+        image[5, 125:145] = 5
+
+        segm = SegmentationImage(image)
+
+        polygons = segm.polygons
+        assert len(polygons) == 5
+        for polygon in polygons:
+            assert isinstance(polygon, (Polygon, MultiPolygon))
+        assert isinstance(polygons[2], MultiPolygon)
+
+        segments = segm.segments
+        assert len(segments) == 5
+        assert isinstance(segments[0], Segment)
+
+        patches = segm.to_patches()
+        assert len(patches) == 5
+        for patch in patches:
+            assert isinstance(patch, PathPatch)
+
+        regions = segm.to_regions()
+        assert len(regions) == 7
+        assert isinstance(regions, Regions)
+        for region in regions:
+            assert isinstance(region, PolygonPixelRegion)
+
+        regions = segm.to_regions(group=True)
+        assert len(regions) == 5
+        assert isinstance(regions, list)
+        for region in regions:
+            assert isinstance(region, (Regions, PolygonPixelRegion))
+        assert isinstance(regions[2], Regions)
+
+        # combine all segments into a single segment;
+        # now have multipolygon objects, some with holes
+        segm.reassign_labels(segm.labels, new_label=4)
+        polygons = segm.polygons
+        assert len(polygons) == 1
+        assert isinstance(polygons[0], MultiPolygon)
+        segments = segm.segments
+        assert len(segments) == 1
+        patches = segm.to_patches()
+        assert len(patches) == 1
+        assert isinstance(patches[0], PathPatch)
+        regions = segm.to_regions()
+        assert len(regions) == 7
+        assert isinstance(regions, Regions)
+        assert isinstance(regions[0], PolygonPixelRegion)
+        regions = segm.to_regions(group=True)
+        assert len(regions) == 1
+        assert isinstance(regions, list)
+        assert isinstance(regions[0], Regions)
+        assert len(regions[0]) == 7
+
+    def test_deblended_labels(self):
+        data = np.array([[1, 1, 0, 0, 4, 4],
+                         [0, 0, 0, 0, 0, 4],
+                         [0, 0, 7, 8, 0, 0],
+                         [6, 0, 0, 0, 0, 5],
+                         [6, 6, 0, 5, 5, 5],
+                         [6, 6, 0, 0, 5, 5]])
+        segm = SegmentationImage(data)
+
+        segm0 = segm.copy()
+        assert segm0._deblend_label_map == {}
+        assert segm0.deblended_labels.size == 0
+        assert segm0.deblended_labels_map == {}
+        assert segm0.deblended_labels_inverse_map == {}
+
+        deblend_map = {2: np.array([5, 6]), 3: np.array([7, 8])}
+        segm._deblend_label_map = deblend_map
+        assert_equal(segm._deblend_label_map, deblend_map)
+        assert_equal(segm.deblended_labels, [5, 6, 7, 8])
+        assert segm.deblended_labels_map == {5: 2, 6: 2, 7: 3, 8: 3}
+        assert segm.deblended_labels_inverse_map == deblend_map
+
+        segm2 = segm.copy()
+        segm2.relabel_consecutive()
+        deblend_map = {2: [3, 4], 3: [5, 6]}
+        assert_equal(segm2._deblend_label_map, deblend_map)
+        assert_equal(segm2.deblended_labels, [3, 4, 5, 6])
+        assert segm2.deblended_labels_map == {3: 2, 4: 2, 5: 3, 6: 3}
+        assert_equal(segm2.deblended_labels_inverse_map, deblend_map)
+
+        segm3 = segm.copy()
+        segm3.relabel_consecutive(start_label=10)
+        deblend_map = {2: [12, 13], 3: [14, 15]}
+        assert_equal(segm3._deblend_label_map, deblend_map)
+        assert_equal(segm3.deblended_labels, [12, 13, 14, 15])
+        assert segm3.deblended_labels_map == {12: 2, 13: 2, 14: 3, 15: 3}
+        assert_equal(segm3.deblended_labels_inverse_map, deblend_map)
+
+        segm4 = segm.copy()
+        segm4.reassign_label(5, 50)
+        segm4.reassign_label(7, 70)
+        deblend_map = {2: [50, 6], 3: [70, 8]}
+        assert_equal(segm4._deblend_label_map, deblend_map)
+        assert_equal(segm4.deblended_labels, [6, 8, 50, 70])
+        assert segm4.deblended_labels_map == {50: 2, 6: 2, 70: 3, 8: 3}
+        assert_equal(segm4.deblended_labels_inverse_map, deblend_map)
+
+        segm5 = segm.copy()
+        segm5.reassign_label(5, 50, relabel=True)
+        deblend_map = {2: [6, 3], 3: [4, 5]}
+        assert_equal(segm5._deblend_label_map, deblend_map)
+        assert_equal(segm5.deblended_labels, [3, 4, 5, 6])
+        assert segm5.deblended_labels_map == {6: 2, 3: 2, 4: 3, 5: 3}
+        assert_equal(segm5.deblended_labels_inverse_map, deblend_map)
 
 
 class CustomSegm(SegmentationImage):
@@ -497,5 +711,5 @@ def test_subclass():
                       [70, 70, 0, 0],
                       [70, 70, 0, 1]])
     segm.data = data2
-    assert len(segm.__dict__) == 2
+    assert len(segm.__dict__) == 3
     assert_equal(segm.areas, [1, 2, 2, 4])

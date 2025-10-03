@@ -15,11 +15,11 @@ That way, we are mainly checking numerical differences that originate
 in the algorithms themselves, and not caused by noise. The quantities
 compared this way are:
 
-  - mean intensity: less than 1% diff. for sma > 3 pixels, 5% otherwise
-  - ellipticity: less than 1% diff. for sma > 3 pixels, 20% otherwise
-  - position angle: less than 1 deg. diff. for sma > 3 pixels, 20 deg.
-    otherwise
-  - X and Y position: less than 0.2 pixel diff.
+* mean intensity: less than 1% diff. for sma > 3 pixels, 5% otherwise
+* ellipticity: less than 1% diff. for sma > 3 pixels, 20% otherwise
+* position angle: less than 1 deg. diff. for sma > 3 pixels, 20 deg.
+  otherwise
+* X and Y position: less than 0.2 pixel diff.
 
 For the M51 image we have mostly good agreement with the SPP code
 in most of the parameters (mean isophotal intensity agrees within a
@@ -63,13 +63,15 @@ from photutils.isophote.integrator import BILINEAR
 #                                   'synth_highsnr'])
 @pytest.mark.parametrize('name', ['synth_highsnr'])
 @pytest.mark.remote_data
-def test_regression(name, integrmode=BILINEAR, verbose=False):
+def test_regression(name):
     """
     NOTE: The original code in SPP won't create the right table
     for the MEAN integration moder, so use the screen output
     at synth_table_mean.txt to compare results visually with
     synth_table_mean.fits.
     """
+    integrmode = BILINEAR
+    verbose = False
     filename = f'{name}_table.fits'
     path = op.join(op.dirname(op.abspath(__file__)), 'data', filename)
     table = Table.read(path)

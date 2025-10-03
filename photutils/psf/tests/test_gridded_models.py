@@ -69,7 +69,30 @@ class TestGriddedPSFModel:
         xypos = grid_xypos[idx]
         assert_allclose(xypos, grid_xypos)
 
+        # check that data and grid_xypos attributes are read-only
+        match = 'object has no setter'
+        with pytest.raises(AttributeError, match=match):
+            psfmodel.data = np.ones((4, 5, 5))
+        with pytest.raises(AttributeError, match=match):
+            psfmodel.grid_xypos = [[0, 0], [1, 1]]
+
     def test_gridded_psf_model_basic_eval(self, psfmodel):
+        assert psfmodel(0, 0) == 1
+        assert psfmodel(100, 100) == 0
+        assert_allclose(psfmodel([0, 100], [0, 100]), [1, 0])
+
+        y, x = np.mgrid[0:100, 0:100]
+        psf = psfmodel.evaluate(x=x, y=y, flux=100, x_0=40, y_0=60)
+        assert psf.shape == (100, 100)
+
+        _, y2, x2 = np.mgrid[0:100, 0:100, 0:100]
+        match = 'x and y must be 1D or 2D'
+        with pytest.raises(ValueError, match=match):
+            psfmodel.evaluate(x=x2, y=y2, flux=100, x_0=40, y_0=60)
+
+    def test_gridded_psf_model_single_psf(self, psfmodel):
+        psfmodel = psfmodel.copy()
+        psfmodel._data = psfmodel.data[0:1, :, :]
         assert psfmodel(0, 0) == 1
         assert psfmodel(100, 100) == 0
         assert_allclose(psfmodel([0, 100], [0, 100]), [1, 0])
@@ -111,7 +134,13 @@ class TestGriddedPSFModel:
 
         match = 'The length of the PSF x and y axes must both be at least 4'
         with pytest.raises(ValueError, match=match):
-            GriddedPSFModel(NDData(np.ones((3, 3, 3))))
+            GriddedPSFModel(NDData(np.ones((4, 3, 3))))
+
+        match = 'The number of ePSFs must not be 2 or 3'
+        meta = {'grid_xypos': [[0, 0], [1, 0], [1, 0]], 'oversampling': 4}
+        nddata = NDData(np.ones((3, 4, 4)), meta=meta)
+        with pytest.raises(ValueError, match=match):
+            GriddedPSFModel(nddata)
 
         match = 'All elements of input data must be finite'
         data2 = np.ones((4, 5, 5))
@@ -135,6 +164,13 @@ class TestGriddedPSFModel:
 
         # check if grid_xypos is a regular grid
         meta = {'grid_xypos': [[0, 0], [1, 0], [1, 0], [3, 4]],
+                'oversampling': 4}
+        nddata = NDData(data, meta=meta)
+        match = 'grid_xypos must form a rectangular grid'
+        with pytest.raises(ValueError, match=match):
+            GriddedPSFModel(nddata)
+
+        meta = {'grid_xypos': [[0, 0], [0, 2], [0, 4], [0, 6]],
                 'oversampling': 4}
         nddata = NDData(data, meta=meta)
         match = 'grid_xypos must form a rectangular grid'

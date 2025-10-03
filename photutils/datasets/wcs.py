@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for making example WCS objects.
+Provide tools for making example WCS objects.
 """
 
 import astropy.units as u
@@ -9,7 +9,7 @@ from astropy import coordinates as coord
 from astropy.modeling import models
 from astropy.wcs import WCS
 
-__all__ = ['make_wcs', 'make_gwcs']
+__all__ = ['make_gwcs', 'make_wcs']
 
 __doctest_requires__ = {'make_gwcs': ['gwcs']}
 

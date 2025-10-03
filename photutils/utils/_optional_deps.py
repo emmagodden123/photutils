@@ -1,10 +1,12 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-Checks for optional dependencies using lazy import from `PEP 562
-<https://www.python.org/dev/peps/pep-0562/>`_.
+Define tools for optional dependencies.
 """
 
 import importlib
+
+# Check for optional dependencies using lazy import from `PEP 562
+# <https://www.python.org/dev/peps/pep-0562/>`_.
 
 # This list is a duplicate of the dependencies in pyproject.toml "all".
 # Note that in some cases the package names are different from the
@@ -23,4 +25,5 @@ def __getattr__(name):
             return False
         return True
 
-    raise AttributeError(f'Module {__name__!r} has no attribute {name!r}.')
+    msg = f'Module {__name__!r} has no attribute {name!r}'
+    raise AttributeError(msg)

@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools for generating footprints.
+Define tools for generating footprints.
 """
 
 import numpy as np
@@ -42,8 +42,8 @@ def circular_footprint(radius, dtype=int):
            [0, 0, 1, 0, 0]])
     """
     if ~np.isfinite(radius) or radius <= 0 or int(radius) != radius:
-        raise ValueError('radius must be a positive, finite integer greater '
-                         'than 0')
+        msg = 'radius must be a positive, finite integer greater than 0'
+        raise ValueError(msg)
 
     x = np.arange(-radius, radius + 1)
     xx, yy = np.meshgrid(x, x)

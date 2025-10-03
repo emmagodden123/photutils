@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines elliptical and elliptical-annulus apertures in both
-pixel and sky coordinates.
+Define elliptical and elliptical-annulus apertures in both pixel and sky
+coordinates.
 """
 
 import math
@@ -17,8 +17,13 @@ from photutils.aperture.core import PixelAperture, SkyAperture
 from photutils.aperture.mask import ApertureMask
 from photutils.geometry import elliptical_overlap_grid
 
-__all__ = ['EllipticalMaskMixin', 'EllipticalAperture', 'EllipticalAnnulus',
-           'SkyEllipticalAperture', 'SkyEllipticalAnnulus']
+__all__ = [
+    'EllipticalAnnulus',
+    'EllipticalAperture',
+    'EllipticalMaskMixin',
+    'SkyEllipticalAnnulus',
+    'SkyEllipticalAperture',
+]
 
 
 class EllipticalMaskMixin:
@@ -39,25 +44,24 @@ class EllipticalMaskMixin:
             aperture types. Note that the more precise methods are
             generally slower. The following methods are available:
 
-                * ``'exact'`` (default):
-                  The exact fractional overlap of the aperture and each
-                  pixel is calculated. The aperture weights will contain
-                  values between 0 and 1.
+            * ``'exact'`` (default):
+              The exact fractional overlap of the aperture and each
+              pixel is calculated. The aperture weights will contain
+              values between 0 and 1.
 
-                * ``'center'``:
-                  A pixel is considered to be entirely in or out of the
-                  aperture depending on whether its center is in or out
-                  of the aperture. The aperture weights will contain
-                  values only of 0 (out) and 1 (in).
+            * ``'center'``:
+              A pixel is considered to be entirely in or out of the
+              aperture depending on whether its center is in or out of
+              the aperture. The aperture weights will contain values
+              only of 0 (out) and 1 (in).
 
-                * ``'subpixel'``:
-                  A pixel is divided into subpixels (see the
-                  ``subpixels`` keyword), each of which are considered
-                  to be entirely in or out of the aperture depending
-                  on whether its center is in or out of the aperture.
-                  If ``subpixels=1``, this method is equivalent to
-                  ``'center'``. The aperture weights will contain values
-                  between 0 and 1.
+            * ``'subpixel'``:
+              A pixel is divided into subpixels (see the ``subpixels``
+              keyword), each of which are considered to be entirely in
+              or out of the aperture depending on whether its center is
+              in or out of the aperture. If ``subpixels=1``, this method
+              is equivalent to ``'center'``. The aperture weights will
+              contain values between 0 and 1.
 
         subpixels : int, optional
             For the ``'subpixel'`` method, resample pixels by this
@@ -83,21 +87,22 @@ class EllipticalMaskMixin:
             a = self.a_out
             b = self.b_out
         else:
-            raise ValueError('Cannot determine the aperture shape.')
+            msg = 'Cannot determine the aperture shape'
+            raise ValueError(msg)
 
         masks = []
         for bbox, edges in zip(self._bbox, self._centered_edges, strict=True):
             ny, nx = bbox.shape
+            theta_rad = self.theta.to(u.radian).value
             mask = elliptical_overlap_grid(edges[0], edges[1], edges[2],
                                            edges[3], nx, ny, a, b,
-                                           self._theta_radians,
-                                           use_exact, subpixels)
+                                           theta_rad, use_exact, subpixels)
 
             # subtract the inner ellipse for an annulus
             if hasattr(self, 'a_in'):
                 mask -= elliptical_overlap_grid(edges[0], edges[1], edges[2],
                                                 edges[3], nx, ny, self.a_in,
-                                                self.b_in, self._theta_radians,
+                                                self.b_in, theta_rad,
                                                 use_exact, subpixels)
 
             masks.append(ApertureMask(mask, bbox))
@@ -112,8 +117,9 @@ class EllipticalMaskMixin:
         """
         Calculate half of the bounding box extents of an ellipse.
         """
-        cos_theta = np.cos(theta)
-        sin_theta = np.sin(theta)
+        theta_rad = theta.to(u.radian).value
+        cos_theta = np.cos(theta_rad)
+        sin_theta = np.sin(theta_rad)
         semimajor_x = semimajor_axis * cos_theta
         semimajor_y = semimajor_axis * sin_theta
         semiminor_x = semiminor_axis * -sin_theta
@@ -137,8 +143,8 @@ class EllipticalAperture(EllipticalMaskMixin, PixelAperture):
         The pixel coordinates of the aperture center(s) in one of the
         following formats:
 
-            * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
-            * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
+        * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
+        * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
 
     a : float
         The semimajor axis of the ellipse in pixels.
@@ -185,12 +191,11 @@ class EllipticalAperture(EllipticalMaskMixin, PixelAperture):
         self.positions = positions
         self.a = a
         self.b = b
-        self._theta_radians = 0.0  # defined by theta setter
         self.theta = theta
 
     @property
     def _xy_extents(self):
-        return self._calc_extents(self.a, self.b, self._theta_radians)
+        return self._calc_extents(self.a, self.b, self.theta)
 
     @property
     def area(self):
@@ -226,9 +231,9 @@ class EllipticalAperture(EllipticalMaskMixin, PixelAperture):
         xy_positions, patch_kwargs = self._define_patch_params(origin=origin,
                                                                **kwargs)
 
-        theta_deg = self._theta_radians * 180.0 / np.pi
+        angle = self.theta.to(u.deg).value
         patches = [mpatches.Ellipse(xy_position, 2.0 * self.a, 2.0 * self.b,
-                                    angle=theta_deg, **patch_kwargs)
+                                    angle=angle, **patch_kwargs)
                    for xy_position in xy_positions]
 
         if self.isscalar:
@@ -274,8 +279,8 @@ class EllipticalAnnulus(EllipticalMaskMixin, PixelAperture):
         The pixel coordinates of the aperture center(s) in one of the
         following formats:
 
-            * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
-            * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
+        * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
+        * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
 
     a_in : float
         The inner semimajor axis of the elliptical annulus in pixels.
@@ -290,8 +295,9 @@ class EllipticalAnnulus(EllipticalMaskMixin, PixelAperture):
         The inner semiminor axis of the elliptical annulus in pixels.
         If `None`, then the inner semiminor axis is calculated as:
 
-            .. math:: b_{in} = b_{out}
-                \left(\frac{a_{in}}{a_{out}}\right)
+        .. math::
+
+            b_{in} = b_{out} \left(\frac{a_{in}}{a_{out}}\right)
 
     theta : float or `~astropy.units.Quantity`, optional
         The rotation angle as an angular quantity
@@ -338,7 +344,8 @@ class EllipticalAnnulus(EllipticalMaskMixin, PixelAperture):
 
     def __init__(self, positions, a_in, a_out, b_out, b_in=None, theta=0.0):
         if not a_out > a_in:
-            raise ValueError('"a_out" must be greater than "a_in".')
+            msg = '"a_out" must be greater than "a_in"'
+            raise ValueError(msg)
 
         self.positions = positions
         self.a_in = a_in
@@ -348,15 +355,15 @@ class EllipticalAnnulus(EllipticalMaskMixin, PixelAperture):
         if b_in is None:
             b_in = self.b_out * self.a_in / self.a_out
         elif not b_out > b_in:
-            raise ValueError('"b_out" must be greater than "b_in".')
+            msg = '"b_out" must be greater than "b_in"'
+            raise ValueError(msg)
         self.b_in = b_in
 
-        self._theta_radians = 0.0  # defined by theta setter
         self.theta = theta
 
     @property
     def _xy_extents(self):
-        return self._calc_extents(self.a_out, self.b_out, self._theta_radians)
+        return self._calc_extents(self.a_out, self.b_out, self.theta)
 
     @property
     def area(self):
@@ -393,12 +400,12 @@ class EllipticalAnnulus(EllipticalMaskMixin, PixelAperture):
                                                                **kwargs)
 
         patches = []
-        theta_deg = self._theta_radians * 180.0 / np.pi
+        angle = self.theta.to(u.deg).value
         for xy_position in xy_positions:
             patch_inner = mpatches.Ellipse(xy_position, 2.0 * self.a_in,
-                                           2.0 * self.b_in, angle=theta_deg)
+                                           2.0 * self.b_in, angle=angle)
             patch_outer = mpatches.Ellipse(xy_position, 2.0 * self.a_out,
-                                           2.0 * self.b_out, angle=theta_deg)
+                                           2.0 * self.b_out, angle=angle)
             path = self._make_annulus_path(patch_inner, patch_outer)
             patches.append(mpatches.PathPatch(path, **patch_kwargs))
 
@@ -525,8 +532,9 @@ class SkyEllipticalAnnulus(SkyAperture):
         The inner semiminor axis in angular units. If `None`, then the
         inner semiminor axis is calculated as:
 
-            .. math:: b_{in} = b_{out}
-                \left(\frac{a_{in}}{a_{out}}\right)
+        .. math::
+
+            b_{in} = b_{out} \left(\frac{a_{in}}{a_{out}}\right)
 
     theta : scalar `~astropy.units.Quantity`, optional
         The position angle (in angular units) of the ellipse semimajor
@@ -555,7 +563,8 @@ class SkyEllipticalAnnulus(SkyAperture):
     def __init__(self, positions, a_in, a_out, b_out, b_in=None,
                  theta=0.0 * u.deg):
         if not a_out > a_in:
-            raise ValueError('"a_out" must be greater than "a_in".')
+            msg = '"a_out" must be greater than "a_in"'
+            raise ValueError(msg)
 
         self.positions = positions
         self.a_in = a_in
@@ -565,7 +574,8 @@ class SkyEllipticalAnnulus(SkyAperture):
         if b_in is None:
             b_in = self.b_out * self.a_in / self.a_out
         elif not b_out > b_in:
-            raise ValueError('"b_out" must be greater than "b_in".')
+            msg = '"b_out" must be greater than "b_in"'
+            raise ValueError(msg)
         self.b_in = b_in
 
         self.theta = theta

@@ -1,0 +1,43 @@
+.. doctest-skip-all
+
+.. _whatsnew-3.0:
+
+****************************
+What's New in Photutils 3.0?
+****************************
+
+Here we highlight some of the new functionality of the 3.0 release.
+In addition to these changes, Photutils 3.0 includes several
+smaller improvements and bug fixes, which are described in the full
+:ref:`changelog`.
+
+.. contents::
+   :local:
+   :depth: 2
+
+
+New Deprecations
+================
+
+The ``interpolator`` keyword argument for ``Background2D`` is
+now deprecated. When ``interpolator`` is eventually removed, the
+``scipy.ndimage.zoom`` cubic spline interpolator will always be used to
+resize the low-resolution arrays. The behavior will be identical to the
+current ``BkgZoomInterpolator`` default.
+
+Relatedly, the ``BkgIDWInterpolator`` and ``BkgZoomInterpolator``
+classes are now deprecated. The ``BkgIDWInterpolator`` is not
+well-suited for resizing images on a regular grid to larger sizes. It
+is also significantly slower than the default interpolator based on
+``scipy.ndimage.zoom``.
+
+
+Removed Deprecations
+====================
+
+The following previously deprecated features have been removed:
+
+* The ``Background2D`` ``edge_method`` keyword argument.
+* The ``Background2D`` ``background_mesh_masked``,
+  ``background_rms_mesh_masked``, and ``mesh_nmasked`` properties.
+* The ``BkgZoomInterpolator`` ``grid_mode`` keyword argument.

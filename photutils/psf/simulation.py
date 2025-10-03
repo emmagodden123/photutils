@@ -1,13 +1,13 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides simulation utilities for creating images from PSF
-models.
+Define simulation utilities for creating images from PSF models.
 """
 
 import numpy as np
 
 from photutils.datasets import make_model_image, make_model_params
-from photutils.psf.utils import _get_psf_model_params
+from photutils.datasets.images import _model_shape_from_bbox
+from photutils.psf.utils import _get_psf_model_main_params
 from photutils.utils._parameters import as_pair
 
 __all__ = ['make_psf_model_image']
@@ -67,9 +67,7 @@ def make_psf_model_image(shape, psf_model, n_sources, *, model_shape=None,
     progress_bar : bool, optional
         Whether to display a progress bar when creating the sources. The
         progress bar requires that the `tqdm <https://tqdm.github.io/>`_
-        optional dependency be installed. Note that the progress
-        bar does not currently work in the Jupyter console due to
-        limitations in ``tqdm``.
+        optional dependency be installed.
 
     **kwargs
         Keyword arguments are accepted for additional model parameters.
@@ -94,7 +92,7 @@ def make_psf_model_image(shape, psf_model, n_sources, *, model_shape=None,
     --------
     >>> from photutils.psf import CircularGaussianPRF, make_psf_model_image
     >>> shape = (150, 200)
-    >>> psf_model= CircularGaussianPRF(fwhm=3.5)
+    >>> psf_model = CircularGaussianPRF(fwhm=3.5)
     >>> n_sources = 10
     >>> data, params = make_psf_model_image(shape, psf_model, n_sources,
     ...                                     flux=(100, 250),
@@ -106,16 +104,16 @@ def make_psf_model_image(shape, psf_model, n_sources, *, model_shape=None,
     >>> print(params)  # doctest: +FLOAT_CMP
      id   x_0      y_0      flux
     --- -------- -------- --------
-      1 125.4749  72.2784 147.9522
-      2  57.1803  38.6027 128.1262
-      3  14.6211 116.0558 200.8790
-      4  10.0741 132.6001 129.2661
-      5 158.2683  43.1937 186.6532
-      6 176.7725  80.2951 190.3359
-      7 142.6864 133.6184 244.3635
-      8 108.1142  12.5095 110.8398
-      9 180.9235 106.5528 174.9959
-     10 158.7488  90.5548 211.6146
+      1 125.2010  72.3184 147.9522
+      2  57.6408  39.1380 128.1262
+      3  15.5391 115.4520 200.8790
+      4  11.0411 131.7530 129.2661
+      5 157.6417  43.6615 186.6532
+      6 175.9470  80.2172 190.3359
+      7 142.2274 132.7563 244.3635
+      8 108.0270  13.4284 110.8398
+      9 180.0533 106.0888 174.9959
+     10 158.1171  90.3260 211.6146
 
     .. plot::
         :include-source:
@@ -123,7 +121,7 @@ def make_psf_model_image(shape, psf_model, n_sources, *, model_shape=None,
         import matplotlib.pyplot as plt
         from photutils.psf import CircularGaussianPRF, make_psf_model_image
         shape = (150, 200)
-        psf_model= CircularGaussianPRF(fwhm=3.5)
+        psf_model = CircularGaussianPRF(fwhm=3.5)
         n_sources = 10
         data, params = make_psf_model_image(shape, psf_model, n_sources,
                                             flux=(100, 250),
@@ -137,7 +135,7 @@ def make_psf_model_image(shape, psf_model, n_sources, *, model_shape=None,
         import matplotlib.pyplot as plt
         from photutils.psf import CircularGaussianPRF, make_psf_model_image
         shape = (150, 200)
-        psf_model= CircularGaussianPRF(fwhm=3.5)
+        psf_model = CircularGaussianPRF(fwhm=3.5)
         n_sources = 10
         data, params = make_psf_model_image(shape, psf_model, n_sources,
                                             flux=(100, 250),
@@ -145,32 +143,30 @@ def make_psf_model_image(shape, psf_model, n_sources, *, model_shape=None,
                                             seed=0, sigma=(1, 2))
         plt.imshow(data, origin='lower')
     """
-    psf_params = _get_psf_model_params(psf_model)
+    main_params = _get_psf_model_main_params(psf_model)
 
     if model_shape is not None:
         model_shape = as_pair('model_shape', model_shape, lower_bound=(0, 1))
     else:
         try:
-            bbox = psf_model.bounding_box.bounding_box()
-            model_shape = (int(np.round(bbox[0][1] - bbox[0][0])),
-                           int(np.round(bbox[1][1] - bbox[1][0])))
-
-        except NotImplementedError as exc:
-            raise ValueError('model_shape must be specified if the model '
-                             'does not have a bounding_box attribute') from exc
+            model_shape = _model_shape_from_bbox(psf_model)
+        except ValueError as exc:
+            msg = ('model_shape must be specified if the model does not '
+                   'have a bounding_box attribute')
+            raise ValueError(msg) from exc
 
     if border_size is None:
         border_size = (np.array(model_shape) - 1) // 2
 
     other_params = {}
     if kwargs:
-        # include only kwargs that are not x, y, or flux
+        # include only kwargs that are not x, y, or flux (main params)
         for key, val in kwargs.items():
-            if key not in psf_model.param_names or key in psf_params[0:2]:
+            if key not in psf_model.param_names or key in main_params[0:2]:
                 continue  # skip the x, y parameters
             other_params[key] = val
 
-    x_name, y_name = psf_params[0:2]
+    x_name, y_name = main_params[0:2]
     params = make_model_params(shape, n_sources, x_name=x_name, y_name=y_name,
                                min_separation=min_separation,
                                border_size=border_size, seed=seed,

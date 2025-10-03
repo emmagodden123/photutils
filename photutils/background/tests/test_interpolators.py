@@ -10,7 +10,7 @@ from astropy.utils.exceptions import AstropyDeprecationWarning
 
 from photutils.background.background_2d import Background2D
 from photutils.background.interpolators import (BkgIDWInterpolator,
-                                                BkgZoomInterpolator)
+                                                _BkgZoomInterpolator)
 
 
 def test_zoom_interp():
@@ -20,19 +20,14 @@ def test_zoom_interp():
                      [0.01, 0.02, 0.03],
                      [0.03, 0.03, 12.9]])
 
-    interp = BkgZoomInterpolator(clip=False)
+    interp = _BkgZoomInterpolator(clip=False)
     zoom = interp(mesh, **bkg._interp_kwargs)
     assert zoom.shape == (300, 300)
-
-    with pytest.warns(AstropyDeprecationWarning):
-        bkg = Background2D(data, 100, edge_method='crop')
-    zoom2 = interp(mesh, **bkg._interp_kwargs)
-    assert zoom2.shape == (300, 300)
 
     # test with units
     unit = u.nJy
     bkg = Background2D(data << unit, 100)
-    interp = BkgZoomInterpolator(clip=False)
+    interp = _BkgZoomInterpolator(clip=False)
     zoom = interp(mesh << unit, **bkg._interp_kwargs)
     assert zoom.shape == (300, 300)
 
@@ -47,10 +42,10 @@ def test_zoom_interp_clip():
                      [0.01, 0.02, 0.03],
                      [0.03, 0.03, 12.9]])
 
-    interp1 = BkgZoomInterpolator(clip=False)
+    interp1 = _BkgZoomInterpolator(clip=False)
     zoom1 = interp1(mesh, **bkg._interp_kwargs)
 
-    interp2 = BkgZoomInterpolator(clip=True)
+    interp2 = _BkgZoomInterpolator(clip=True)
     zoom2 = interp2(mesh, **bkg._interp_kwargs)
 
     minval = np.min(mesh)
@@ -63,19 +58,25 @@ def test_zoom_interp_clip():
 
 def test_idw_interp():
     data = np.ones((300, 300))
-    bkg = Background2D(data, 100)
+    with pytest.warns(AstropyDeprecationWarning):
+        interp = BkgIDWInterpolator()
+    with pytest.warns(AstropyDeprecationWarning):
+        bkg = Background2D(data, 100, interpolator=interp)
     mesh = np.array([[0.01, 0.01, 0.02],
                      [0.01, 0.02, 0.03],
                      [0.03, 0.03, 12.9]])
 
-    interp = BkgIDWInterpolator()
     zoom = interp(mesh, **bkg._interp_kwargs)
     assert zoom.shape == (300, 300)
 
+    # test constant mesh data
+    zoom = interp(np.ones_like(mesh), **bkg._interp_kwargs)
+    assert np.all(zoom == 1)
+
     # test with units
     unit = u.nJy
-    bkg = Background2D(data << unit, 100)
-    interp = BkgIDWInterpolator()
+    with pytest.warns(AstropyDeprecationWarning):
+        bkg = Background2D(data << unit, 100, interpolator=interp)
     zoom = interp(mesh << unit, **bkg._interp_kwargs)
     assert zoom.shape == (300, 300)
 

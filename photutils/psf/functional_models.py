@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides mathematical functional PSF models.
+Define functional PSF models.
 """
 
 import astropy.units as u
@@ -8,13 +8,19 @@ import numpy as np
 from astropy.modeling import Fittable2DModel, Parameter
 from astropy.modeling.utils import ellipse_extent
 from astropy.units import UnitsError
-from astropy.utils.decorators import deprecated
 from scipy.special import erf, j1, jn_zeros
 
-__all__ = ['GaussianPSF', 'CircularGaussianPSF', 'GaussianPRF',
-           'CircularGaussianPRF', 'CircularGaussianSigmaPRF',
-           'IntegratedGaussianPRF', 'MoffatPSF', 'AiryDiskPSF']
+__all__ = [
+    'AiryDiskPSF',
+    'CircularGaussianPRF',
+    'CircularGaussianPSF',
+    'CircularGaussianSigmaPRF',
+    'GaussianPRF',
+    'GaussianPSF',
+    'MoffatPSF',
+]
 
+FLOAT_EPSILON = float(np.finfo(np.float32).tiny)
 GAUSSIAN_FWHM_TO_SIGMA = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 
 
@@ -122,6 +128,9 @@ class GaussianPSF(Fittable2DModel):
         >>> model.y_fwhm.fixed = False
         >>> model.theta.fixed = False
 
+    By default, the ``x_fwhm`` and ``y_fwhm`` parameters are bounded to
+    be strictly positive.
+
     References
     ----------
     .. [1] https://en.wikipedia.org/wiki/Gaussian_function
@@ -148,11 +157,15 @@ class GaussianPSF(Fittable2DModel):
     y_0 = Parameter(
         default=0, description='Position of the peak along the y axis')
     x_fwhm = Parameter(
-        default=1, description='FWHM of the Gaussian along the x axis',
-        fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='FWHM of the Gaussian along the x axis')
     y_fwhm = Parameter(
-        default=1, description='FWHM of the Gaussian along the y axis',
-        fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='FWHM of the Gaussian along the y axis')
     theta = Parameter(
         default=0.0, description=('CCW rotation angle either as a float (in '
                                   'degrees) or a Quantity angle (optional)'),
@@ -407,7 +420,8 @@ class GaussianPSF(Fittable2DModel):
         # units otherwise this can lead to issues since rotation is not well
         # defined.
         if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
-            raise UnitsError("Units of 'x' and 'y' inputs should match")
+            msg = "Units of 'x' and 'y' inputs should match"
+            raise UnitsError(msg)
 
         return {'x_0': inputs_unit[self.inputs[0]],
                 'y_0': inputs_unit[self.inputs[0]],
@@ -484,6 +498,9 @@ class CircularGaussianPSF(Fittable2DModel):
         >>> model = CircularGaussianPSF()
         >>> model.fwhm.fixed = False
 
+    By default, the ``fwhm`` parameter is bounded to be strictly
+    positive.
+
     References
     ----------
     .. [1] https://en.wikipedia.org/wiki/Gaussian_function
@@ -509,7 +526,10 @@ class CircularGaussianPSF(Fittable2DModel):
     y_0 = Parameter(
         default=0, description='Position of the peak along the y axis')
     fwhm = Parameter(
-        default=1, description='FWHM of the Gaussian', fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='FWHM of the Gaussian')
 
     def __init__(self, *, flux=flux.default, x_0=x_0.default, y_0=y_0.default,
                  fwhm=fwhm.default, bbox_factor=5.5, **kwargs):
@@ -769,6 +789,9 @@ class GaussianPRF(Fittable2DModel):
         >>> model.y_fwhm.fixed = False
         >>> model.theta.fixed = False
 
+    By default, the ``x_fwhm`` and ``y_fwhm`` parameters are bounded to
+    be strictly positive.
+
     References
     ----------
     .. [1] https://en.wikipedia.org/wiki/Gaussian_function
@@ -795,11 +818,15 @@ class GaussianPRF(Fittable2DModel):
     y_0 = Parameter(
         default=0, description='Position of the peak along the y axis')
     x_fwhm = Parameter(
-        default=1, description='FWHM of the Gaussian along the x axis',
-        fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='FWHM of the Gaussian along the x axis')
     y_fwhm = Parameter(
-        default=1, description='FWHM of the Gaussian along the y axis',
-        fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='FWHM of the Gaussian along the y axis')
     theta = Parameter(
         default=0.0, description=('CCW rotation angle either as a float (in '
                                   'degrees) or a Quantity angle (optional)'),
@@ -954,7 +981,8 @@ class GaussianPRF(Fittable2DModel):
         # units otherwise this can lead to issues since rotation is not well
         # defined.
         if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
-            raise UnitsError("Units of 'x' and 'y' inputs should match")
+            msg = "Units of 'x' and 'y' inputs should match"
+            raise UnitsError(msg)
 
         return {'x_0': inputs_unit[self.inputs[0]],
                 'y_0': inputs_unit[self.inputs[0]],
@@ -1047,6 +1075,9 @@ class CircularGaussianPRF(Fittable2DModel):
         >>> model = CircularGaussianPRF()
         >>> model.fwhm.fixed = False
 
+    By default, the ``fwhm`` parameter is bounded to be strictly
+    positive.
+
     References
     ----------
     .. [1] https://en.wikipedia.org/wiki/Gaussian_function
@@ -1072,7 +1103,10 @@ class CircularGaussianPRF(Fittable2DModel):
     y_0 = Parameter(
         default=0, description='Position of the peak along the y axis')
     fwhm = Parameter(
-        default=1, description='FWHM of the Gaussian', fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='FWHM of the Gaussian')
 
     def __init__(self, *, flux=flux.default, x_0=x_0.default, y_0=y_0.default,
                  fwhm=fwhm.default, bbox_factor=5.5, **kwargs):
@@ -1282,6 +1316,9 @@ class CircularGaussianSigmaPRF(Fittable2DModel):
         >>> model = CircularGaussianSigmaPRF()
         >>> model.sigma.fixed = False
 
+    By default, the ``sigma`` parameter is bounded to be strictly
+    positive.
+
     References
     ----------
     .. [1] https://en.wikipedia.org/wiki/Gaussian_function
@@ -1308,8 +1345,10 @@ class CircularGaussianSigmaPRF(Fittable2DModel):
     y_0 = Parameter(
         default=0, description='Position of the peak along the y axis')
     sigma = Parameter(
-        default=1, description='Sigma (standard deviation) of the Gaussian',
-        fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='Sigma (standard deviation) of the Gaussian')
 
     def __init__(self, *, flux=flux.default, x_0=x_0.default, y_0=y_0.default,
                  sigma=sigma.default, bbox_factor=5.5, **kwargs):
@@ -1432,109 +1471,13 @@ class CircularGaussianSigmaPRF(Fittable2DModel):
         # units otherwise this can lead to issues since rotation is not well
         # defined.
         if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
-            raise UnitsError("Units of 'x' and 'y' inputs should match")
+            msg = "Units of 'x' and 'y' inputs should match"
+            raise UnitsError(msg)
 
         return {'x_0': inputs_unit[self.inputs[0]],
                 'y_0': inputs_unit[self.inputs[0]],
                 'sigma': inputs_unit[self.inputs[0]],
                 'flux': outputs_unit[self.outputs[0]]}
-
-
-@deprecated('2.0.0', alternative='`CircularGaussianSigmaPRF` or '
-            '`CircularGaussianPRF`')
-class IntegratedGaussianPRF(CircularGaussianSigmaPRF):
-    r"""
-    A circular 2D Gaussian PSF model integrated over pixels.
-
-    This model is evaluated by integrating the 2D Gaussian over the
-    input coordinate pixels, and is equivalent to assuming the PSF is
-    2D Gaussian at a *sub-pixel* level. Because it is integrated over
-    pixels, this model is considered a PRF instead of a PSF.
-
-    The Gaussian is normalized such that the analytical integral over
-    the entire 2D plane is equal to the total flux.
-
-    This model is equivalent to `CircularGaussianPRF`, but it is
-    parameterized in terms of the standard deviation (sigma) instead of
-    the full width at half maximum (FWHM).
-
-    Parameters
-    ----------
-    flux : float, optional
-        Total integrated flux over the entire PSF.
-
-    x_0 : float, optional
-        Position of the peak in x direction.
-
-    y_0 : float, optional
-        Position of the peak in y direction.
-
-    sigma : float, optional
-        Width of the Gaussian PSF.
-
-    bbox_factor : float, optional
-        The multiple of the standard deviation (sigma) used to define
-        the bounding box limits.
-
-    **kwargs : dict, optional
-        Additional optional keyword arguments to be passed to the
-        `astropy.modeling.Model` parent class.
-
-    See Also
-    --------
-    GaussianPSF, GaussianPRF, CircularGaussianPSF, CircularGaussianPRF
-
-    Notes
-    -----
-    The circular Gaussian function is defined as:
-
-    .. math::
-
-        f(x, y) =
-            \frac{F}{4}
-            \left[
-                {\rm erf} \left(\frac{x - x_0 + 0.5}
-                                     {\sqrt{2} \sigma} \right)  -
-                {\rm erf} \left(\frac{x - x_0 - 0.5}
-                                     {\sqrt{2} \sigma} \right)
-            \right]
-            \left[
-                {\rm erf} \left(\frac{y - y_0 + 0.5}
-                                     {\sqrt{2} \sigma} \right) -
-                {\rm erf} \left(\frac{y - y_0 - 0.5}
-                                     {\sqrt{2} \sigma} \right)
-            \right]
-
-    where :math:`F` is the total integrated flux, :math:`(x_{0},
-    y_{0})` is the position of the peak, :math:`\sigma` is the standard
-    deviation of the Gaussian, and :math:`{\rm erf}` denotes the error
-    function.
-
-    The model is normalized such that:
-
-    .. math::
-
-        \int_{-\infty}^{\infty} \int_{-\infty}^{\infty} f(x, y) \,dx \,dy = F
-
-    References
-    ----------
-    .. [1] https://en.wikipedia.org/wiki/Gaussian_function
-    """
-
-    flux = Parameter(
-        default=1, description='Total integrated flux over the entire PSF.')
-    x_0 = Parameter(
-        default=0, description='Position of the peak along the x axis')
-    y_0 = Parameter(
-        default=0, description='Position of the peak along the y axis')
-    sigma = Parameter(
-        default=1, description='Sigma (standard deviation) of the Gaussian',
-        fixed=True)
-
-    def __init__(self, *, flux=flux.default, x_0=x_0.default, y_0=y_0.default,
-                 sigma=sigma.default, bbox_factor=5.5, **kwargs):
-        super().__init__(sigma=sigma, x_0=x_0, y_0=y_0, flux=flux,
-                         bbox_factor=bbox_factor, **kwargs)
 
 
 class MoffatPSF(Fittable2DModel):
@@ -1604,7 +1547,8 @@ class MoffatPSF(Fittable2DModel):
 
     .. math::
 
-        \int_{-\infty}^{\infty} \int_{-\infty}^{\infty} f(x, y) \,dx \,dy = F
+        \int_{-\infty}^{\infty} \int_{-\infty}^{\infty} f(x, y)
+            \,dx \,dy = F
 
     The ``alpha`` and ``beta`` parameters are fixed by default. If
     you wish to fit these parameters, set the ``fixed`` attribute to
@@ -1614,6 +1558,9 @@ class MoffatPSF(Fittable2DModel):
         >>> model = MoffatPSF()
         >>> model.alpha.fixed = False
         >>> model.beta.fixed = False
+
+    By default, the ``alpha`` parameter is bounded to be strictly
+    positive and the ``beta`` parameter is bounded to be greater than 1.
 
     References
     ----------
@@ -1644,11 +1591,15 @@ class MoffatPSF(Fittable2DModel):
     y_0 = Parameter(
         default=0, description='Position of the peak along the y axis')
     alpha = Parameter(
-        default=1, description='Characteristic radius of the Moffat profile',
-        fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='Characteristic radius of the Moffat profile')
     beta = Parameter(
-        default=1, description='Power-law index of the Moffat profile',
-        fixed=True)
+        default=2,
+        bounds=(1.0 + FLOAT_EPSILON, None),
+        fixed=True,
+        description='Power-law index of the Moffat profile')
 
     def __init__(self, *, flux=flux.default, x_0=x_0.default, y_0=y_0.default,
                  alpha=alpha.default, beta=beta.default, bbox_factor=10.0,
@@ -1852,7 +1803,8 @@ class AiryDiskPSF(Fittable2DModel):
     .. math::
 
         \int_{0}^{2 \pi} \int_{0}^{\infty} f(r) \,r \,dr \,d\theta =
-        \int_{-\infty}^{\infty} \int_{-\infty}^{\infty} f(x, y) \,dx \,dy = F
+        \int_{-\infty}^{\infty} \int_{-\infty}^{\infty} f(x, y)
+            \,dx \,dy = F
 
     The ``radius`` parameter is fixed by default. If you wish to fit
     this parameter, set the ``fixed`` attribute to `False`, e.g.,::
@@ -1860,6 +1812,9 @@ class AiryDiskPSF(Fittable2DModel):
         >>> from photutils.psf import AiryDiskPSF
         >>> model = AiryDiskPSF()
         >>> model.radius.fixed = False
+
+    By default, the ``radius`` parameter is bounded to be strictly
+    positive.
 
     References
     ----------
@@ -1888,8 +1843,10 @@ class AiryDiskPSF(Fittable2DModel):
     y_0 = Parameter(
         default=0, description='Position of the peak along the y axis')
     radius = Parameter(
-        default=1, description='Radius of the Airy disk at the first zero',
-        fixed=True)
+        default=1,
+        bounds=(FLOAT_EPSILON, None),
+        fixed=True,
+        description='Radius of the Airy disk at the first zero')
 
     _rz = jn_zeros(1, 1)[0] / np.pi
 

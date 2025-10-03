@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines classes to estimate the background and background
-RMS in an array of any dimension.
+Define classes to estimate the background and background RMS in an array
+of any dimension.
 """
 
 import abc
@@ -11,16 +11,27 @@ import numpy as np
 from astropy.stats import SigmaClip, mad_std
 
 from photutils.extern.biweight import biweight_location, biweight_scale
+from photutils.utils._parameters import (SigmaClipSentinelDefault,
+                                         create_default_sigmaclip)
 from photutils.utils._repr import make_repr
 from photutils.utils._stats import nanmean, nanmedian, nanstd
 
-SIGMA_CLIP = SigmaClip(sigma=3.0, maxiters=10)
+__all__ = [
+    'BackgroundBase',
+    'BackgroundRMSBase',
+    'BiweightLocationBackground',
+    'BiweightScaleBackgroundRMS',
+    'MADStdBackgroundRMS',
+    'MMMBackground',
+    'MeanBackground',
+    'MedianBackground',
+    'ModeEstimatorBackground',
+    'SExtractorBackground',
+    'StdBackgroundRMS',
+]
 
-__all__ = ['BackgroundBase', 'BackgroundRMSBase', 'MeanBackground',
-           'MedianBackground', 'ModeEstimatorBackground',
-           'MMMBackground', 'SExtractorBackground',
-           'BiweightLocationBackground', 'StdBackgroundRMS',
-           'MADStdBackgroundRMS', 'BiweightScaleBackgroundRMS']
+
+SIGMA_CLIP = SigmaClipSentinelDefault(sigma=3.0, maxiters=10)
 
 
 class BackgroundBase(metaclass=abc.ABCMeta):
@@ -29,17 +40,21 @@ class BackgroundBase(metaclass=abc.ABCMeta):
 
     Parameters
     ----------
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
     """
 
     def __init__(self, sigma_clip=SIGMA_CLIP):
+        if sigma_clip is SIGMA_CLIP:
+            sigma_clip = create_default_sigmaclip(sigma=SIGMA_CLIP.sigma,
+                                                  maxiters=SIGMA_CLIP.maxiters)
+
         if not isinstance(sigma_clip, SigmaClip) and sigma_clip is not None:
-            raise TypeError('sigma_clip must be an astropy SigmaClip '
-                            'instance or None')
+            msg = 'sigma_clip must be an astropy SigmaClip instance or None'
+            raise TypeError(msg)
+
         self.sigma_clip = sigma_clip
 
     def __repr__(self):
@@ -84,17 +99,21 @@ class BackgroundRMSBase(metaclass=abc.ABCMeta):
 
     Parameters
     ----------
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
     """
 
     def __init__(self, sigma_clip=SIGMA_CLIP):
+        if sigma_clip is SIGMA_CLIP:
+            sigma_clip = create_default_sigmaclip(sigma=SIGMA_CLIP.sigma,
+                                                  maxiters=SIGMA_CLIP.maxiters)
+
         if not isinstance(sigma_clip, SigmaClip) and sigma_clip is not None:
-            raise TypeError('sigma_clip must be an astropy SigmaClip '
-                            'instance or None')
+            msg = 'sigma_clip must be an astropy SigmaClip instance or None'
+            raise TypeError(msg)
+
         self.sigma_clip = sigma_clip
 
     def __repr__(self):
@@ -140,11 +159,10 @@ class MeanBackground(BackgroundBase):
 
     Parameters
     ----------
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------
@@ -193,11 +211,10 @@ class MedianBackground(BackgroundBase):
 
     Parameters
     ----------
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------
@@ -253,11 +270,10 @@ class ModeEstimatorBackground(BackgroundBase):
     mean_factor : float, optional
         The multiplicative factor for the data mean. Defaults to 2.
 
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------
@@ -322,11 +338,10 @@ class MMMBackground(ModeEstimatorBackground):
 
     Parameters
     ----------
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------
@@ -370,11 +385,10 @@ class SExtractorBackground(BackgroundBase):
 
     Parameters
     ----------
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------
@@ -413,21 +427,28 @@ class SExtractorBackground(BackgroundBase):
             _median = np.atleast_1d(nanmedian(data, axis=axis))
             _mean = np.atleast_1d(nanmean(data, axis=axis))
             _std = np.atleast_1d(nanstd(data, axis=axis))
-            bkg = np.atleast_1d((2.5 * _median) - (1.5 * _mean))
+            bkg = (2.5 * _median) - (1.5 * _mean)
 
-            bkg = np.where(_std == 0, _mean, bkg)
+            # set the background to the mean where the std is zero
+            mean_mask = _std == 0
+            bkg[mean_mask] = _mean[mean_mask]
 
-            idx = np.where(_std != 0)
-            condition = (np.abs(_mean[idx] - _median[idx]) / _std[idx]) < 0.3
-            bkg[idx] = np.where(condition, bkg[idx], _median[idx])
-            if bkg.size == 1:
+            # set the background to the median when the absolute
+            # difference between the mean and median divided by the
+            # standard deviation is greater than or equal to 0.3
+
+            med_mask = (np.abs(_mean - _median) / _std) >= 0.3
+            mask = np.logical_and(med_mask, np.logical_not(mean_mask))
+            bkg[mask] = _median[mask]
+
+            # if bkg is a scalar, return it as a float
+            if bkg.shape == (1,) and axis is None:
                 bkg = bkg[0]
-            result = bkg
 
-        if masked and isinstance(result, np.ndarray):
-            result = np.ma.masked_where(np.isnan(result), result)
+        if masked and isinstance(bkg, np.ndarray):
+            bkg = np.ma.masked_where(np.isnan(bkg), bkg)
 
-        return result
+        return bkg
 
 
 class BiweightLocationBackground(BackgroundBase):
@@ -445,11 +466,10 @@ class BiweightLocationBackground(BackgroundBase):
         Initial guess for the biweight location. Default value is
         `None`.
 
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------
@@ -509,11 +529,10 @@ class StdBackgroundRMS(BackgroundRMSBase):
 
     Parameters
     ----------
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------
@@ -574,11 +593,10 @@ class MADStdBackgroundRMS(BackgroundRMSBase):
 
     Parameters
     ----------
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------
@@ -636,11 +654,10 @@ class BiweightScaleBackgroundRMS(BackgroundRMSBase):
         Initial guess for the biweight location. Default value is
         `None`.
 
-    sigma_clip : `astropy.stats.SigmaClip` object, optional
+    sigma_clip : `astropy.stats.SigmaClip` or `None`, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
-        clipping parameters. If `None` then no sigma clipping will
-        be performed. The default is to perform sigma clipping with
-        ``sigma=3.0`` and ``maxiters=5``.
+        clipping parameters. If `None` then no sigma clipping will be
+        performed.
 
     Examples
     --------

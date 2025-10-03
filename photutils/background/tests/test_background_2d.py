@@ -11,10 +11,8 @@ from astropy.utils.exceptions import (AstropyDeprecationWarning,
                                       AstropyUserWarning)
 from numpy.testing import assert_allclose, assert_equal
 
-from photutils.background.background_2d import Background2D
-from photutils.background.core import MeanBackground
-from photutils.background.interpolators import (BkgIDWInterpolator,
-                                                BkgZoomInterpolator)
+from photutils.background import (Background2D, BkgZoomInterpolator,
+                                  MeanBackground, SExtractorBackground)
 from photutils.utils._optional_deps import HAS_MATPLOTLIB
 
 DATA = np.ones((100, 100))
@@ -24,7 +22,6 @@ BKG_RMS_MESH = np.zeros((4, 4))
 PADBKG_MESH = np.ones((5, 5))
 PADBKG_RMS_MESH = np.zeros((5, 5))
 FILTER_SIZES = [(1, 1), (3, 3)]
-INTERPOLATORS = [BkgZoomInterpolator(), BkgIDWInterpolator()]
 
 DATA1 = DATA << u.ct
 DATA2 = NDData(DATA, unit=None)
@@ -34,10 +31,8 @@ DATA4 = CCDData(DATA, unit=u.ct)
 
 class TestBackground2D:
     @pytest.mark.parametrize('filter_size', FILTER_SIZES)
-    @pytest.mark.parametrize('interpolator', INTERPOLATORS)
-    def test_background(self, filter_size, interpolator):
-        bkg = Background2D(DATA, (25, 25), filter_size=filter_size,
-                           interpolator=interpolator)
+    def test_background(self, filter_size):
+        bkg = Background2D(DATA, (25, 25), filter_size=filter_size)
         assert_allclose(bkg.background, DATA)
         assert_allclose(bkg.background_rms, BKG_RMS)
         assert_allclose(bkg.background_mesh, BKG_MESH)
@@ -45,6 +40,24 @@ class TestBackground2D:
         assert bkg.background_median == 1.0
         assert bkg.background_rms_median == 0.0
         assert bkg.npixels_mesh.shape == (4, 4)
+        assert bkg.npixels_map.shape == DATA.shape
+
+    @pytest.mark.parametrize('box_size', [(25, 25), (23, 22)])
+    @pytest.mark.parametrize('dtype', ['int', 'int32', 'float32'])
+    def test_background_dtype(self, box_size, dtype):
+        filter_size = 3
+        data2 = DATA.copy().astype(dtype)
+        bkg = Background2D(data2, box_size, filter_size=filter_size)
+        assert bkg.background.dtype == data2.dtype
+        assert bkg.background_rms.dtype == data2.dtype
+        assert bkg.background_mesh.dtype == data2.dtype
+        assert bkg.background_rms_mesh.dtype == data2.dtype
+        assert bkg.npixels_map.dtype == int
+        assert bkg.npixels_mesh.dtype == int
+        assert_allclose(bkg.background, data2)
+        assert_allclose(bkg.background_rms, BKG_RMS)
+        assert bkg.background_median == 1.0
+        assert bkg.background_rms_median == 0.0
         assert bkg.npixels_map.shape == DATA.shape
 
     @pytest.mark.parametrize('data', [DATA1, DATA3, DATA4])
@@ -66,15 +79,13 @@ class TestBackground2D:
         assert bkg.background_median == 1.0
         assert bkg.background_rms_median == 0.0
 
-    @pytest.mark.parametrize('interpolator', INTERPOLATORS)
-    def test_background_rect(self, interpolator):
+    def test_background_rect(self):
         """
         Regression test for interpolators with non-square input data.
         """
         data = np.arange(12).reshape(3, 4)
         rms = np.zeros((3, 4))
-        bkg = Background2D(data, (1, 1), filter_size=1,
-                           interpolator=interpolator)
+        bkg = Background2D(data, (1, 1), filter_size=1)
         assert_allclose(bkg.background, data, atol=0.005)
         assert_allclose(bkg.background_rms, rms)
         assert_allclose(bkg.background_mesh, data)
@@ -82,20 +93,29 @@ class TestBackground2D:
         assert bkg.background_median == 5.5
         assert bkg.background_rms_median == 0.0
 
-    @pytest.mark.parametrize('interpolator', INTERPOLATORS)
-    def test_background_nonconstant(self, interpolator):
+    def test_background_nonconstant(self):
         data = np.copy(DATA)
         data[25:50, 50:75] = 10.0
         bkg_low_res = np.copy(BKG_MESH)
         bkg_low_res[1, 2] = 10.0
-        bkg1 = Background2D(data, (25, 25), filter_size=(1, 1),
-                            interpolator=interpolator)
+        bkg1 = Background2D(data, (25, 25), filter_size=(1, 1))
         assert_allclose(bkg1.background_mesh, bkg_low_res)
         assert bkg1.background.shape == data.shape
-        bkg2 = Background2D(data, (25, 25), filter_size=(1, 1),
-                            interpolator=interpolator)
+        bkg2 = Background2D(data, (25, 25), filter_size=(1, 1))
         assert_allclose(bkg2.background_mesh, bkg_low_res)
         assert bkg2.background.shape == data.shape
+
+        rng = np.random.default_rng(0)
+        data = rng.normal(1.0, 0.1, (121, 289))
+        mask = np.zeros(data.shape, dtype=bool)
+        mask[50:100, 50:100] = True
+        bkg = Background2D(data, (25, 25), mask=mask)
+        assert np.mean(bkg.background) < 1.0
+        assert np.mean(bkg.background_rms) < 1.0
+        assert bkg.background_median < 1.0
+        assert bkg.background_rms_median < 0.1
+        assert bkg.npixels_mesh.shape == (5, 12)
+        assert bkg.npixels_map.shape == data.shape
 
     def test_no_sigma_clipping(self):
         data = np.copy(DATA)
@@ -107,17 +127,7 @@ class TestBackground2D:
 
         assert bkg2.background_mesh[0, 0] > bkg1.background_mesh[0, 0]
 
-    @pytest.mark.parametrize('filter_size', FILTER_SIZES)
-    def test_resizing(self, filter_size):
-        with pytest.warns(AstropyDeprecationWarning):
-            bkg1 = Background2D(DATA, (23, 22), filter_size=filter_size,
-                                bkg_estimator=MeanBackground(),
-                                edge_method='crop')
-        bkg2 = Background2D(DATA, (23, 22), filter_size=filter_size,
-                            bkg_estimator=MeanBackground())
-        assert_allclose(bkg1.background, bkg2.background, rtol=2e-6)
-        assert_allclose(bkg1.background_rms, bkg2.background_rms)
-
+    def test_resizing(self):
         shape1 = (128, 256)
         shape2 = (129, 256)
         box_size = (16, 16)
@@ -147,13 +157,6 @@ class TestBackground2D:
         assert_allclose(bkg.background, DATA, rtol=2.0e-5)
         assert_allclose(bkg.background_rms, BKG_RMS)
 
-        # test edge crop with mask
-        with pytest.warns(AstropyDeprecationWarning):
-            bkg2 = Background2D(data, box_size, filter_size=(1, 1), mask=mask,
-                                bkg_estimator=MeanBackground(),
-                                edge_method='crop')
-        assert_allclose(bkg2.background, DATA, rtol=2.0e-5)
-
     def test_mask(self):
         data = np.copy(DATA)
         data[25:50, 25:50] = 100.0
@@ -161,27 +164,22 @@ class TestBackground2D:
         mask[25:50, 25:50] = True
         bkg1 = Background2D(data, (25, 25), filter_size=(1, 1), mask=None,
                             bkg_estimator=MeanBackground())
-
-        with pytest.warns(AstropyDeprecationWarning):
-            assert_equal(bkg1.background_mesh, bkg1.background_mesh_masked)
-        with pytest.warns(AstropyDeprecationWarning):
-            assert_equal(bkg1.background_rms_mesh,
-                         bkg1.background_rms_mesh_masked)
-        with pytest.warns(AstropyDeprecationWarning):
-            assert np.count_nonzero(np.isnan(bkg1.mesh_nmasked)) == 0
+        assert np.all(bkg1.npixels_map == 625)
+        assert np.all(bkg1.npixels_mesh == 625)
+        assert bkg1.background.shape == data.shape
+        assert_allclose(bkg1.background_mesh[0, 0], 1.0)
+        assert_allclose(bkg1.background_mesh[1, 1], 100.0)
+        assert np.all(bkg1.background_rms_mesh == 0.0)
 
         bkg2 = Background2D(data, (25, 25), filter_size=(1, 1), mask=mask,
                             bkg_estimator=MeanBackground())
 
-        nboxes_tot = 25 * 25
-        with pytest.warns(AstropyDeprecationWarning):
-            assert (np.count_nonzero(~np.isnan(bkg2.background_mesh_masked))
-                    < nboxes_tot)
-        with pytest.warns(AstropyDeprecationWarning):
-            assert (np.count_nonzero(~np.isnan(
-                bkg2.background_rms_mesh_masked)) < nboxes_tot)
-        with pytest.warns(AstropyDeprecationWarning):
-            assert np.count_nonzero(np.isnan(bkg2.mesh_nmasked)) == 1
+        ngoodpix = DATA.size - 625
+        assert np.count_nonzero(bkg2.npixels_map == 625) == ngoodpix
+        assert np.count_nonzero(bkg2.npixels_mesh == 625) == 15
+        assert bkg2.background.shape == data.shape
+        assert_allclose(bkg2.background_mesh, 1.0)
+        assert np.all(bkg2.background_rms_mesh == 0.0)
 
     @pytest.mark.parametrize('fill_value', [0.0, np.nan, -1.0])
     def test_coverage_mask(self, fill_value):
@@ -195,23 +193,24 @@ class TestBackground2D:
         assert_equal(bkg1.background[:50, :50], fill_value)
         assert_equal(bkg1.background_rms[:50, :50], fill_value)
 
-        # test combination of masks
+        # test that combined mask and coverage_mask gives the same
+        # results
         mask = np.zeros(DATA.shape, dtype=bool)
         coverage_mask = np.zeros(DATA.shape, dtype=bool)
         mask[:50, :25] = True
         coverage_mask[:50, 25:50] = True
-        match = 'Input data contains invalid values'
+        match = r'Input data contains non-finite \(NaN or infinity\) values'
         with pytest.warns(AstropyUserWarning, match=match):
             bkg2 = Background2D(data, (25, 25), filter_size=(1, 1), mask=mask,
                                 coverage_mask=mask, fill_value=0.0,
                                 bkg_estimator=MeanBackground())
-        assert_equal(bkg1.background_mesh, bkg2.background_mesh)
-        assert_equal(bkg1.background_rms_mesh, bkg2.background_rms_mesh)
+        assert_allclose(bkg1.background_mesh, bkg2.background_mesh)
+        assert_allclose(bkg1.background_rms_mesh, bkg2.background_rms_mesh)
 
     def test_mask_nonfinite(self):
         data = DATA.copy()
         data[0, 0:50] = np.nan
-        match = 'Input data contains invalid values'
+        match = r'Input data contains non-finite \(NaN or infinity\) values'
         with pytest.warns(AstropyUserWarning, match=match):
             bkg = Background2D(data, (25, 25), filter_size=(1, 1))
         assert_allclose(bkg.background, DATA, rtol=1e-5)
@@ -257,9 +256,25 @@ class TestBackground2D:
 
     def test_completely_masked(self):
         mask = np.ones(DATA.shape, dtype=bool)
-        match = 'All boxes contain'
+        match = 'All input pixels are masked. Cannot compute a background.'
         with pytest.raises(ValueError, match=match):
             Background2D(DATA, (25, 25), mask=mask)
+        with pytest.raises(ValueError, match=match):
+            Background2D(DATA, (25, 25), coverage_mask=mask)
+
+        mask = np.zeros(DATA.shape, dtype=bool)
+        coverage_mask = np.zeros(DATA.shape, dtype=bool)
+        mask[:, 0:40] = True
+        coverage_mask[:, 40:] = True
+        with pytest.raises(ValueError, match=match):
+            Background2D(DATA, (25, 25), mask=mask,
+                         coverage_mask=coverage_mask)
+
+        data = DATA.copy()
+        data[:] = np.nan
+        match = r'Input data contains all non-finite \(NaN or infinity\)'
+        with pytest.raises(ValueError, match=match):
+            Background2D(data, (25, 25))
 
     def test_zero_padding(self):
         """
@@ -283,15 +298,25 @@ class TestBackground2D:
         """
         data = np.copy(DATA)
         data[0:50, 0:50] = np.nan
-        match = 'Input data contains invalid values'
+        match = r'Input data contains non-finite \(NaN or infinity\) values'
         with pytest.warns(AstropyUserWarning, match=match):
             bkg = Background2D(data, (25, 25), filter_size=(1, 1),
                                exclude_percentile=100.0)
-        assert np.count_nonzero(bkg._nan_idx) == 4
+        assert_equal(bkg.npixels_mesh[0:2, 0:2], np.zeros((2, 2)))
+        assert bkg.npixels_mesh[-1, -1] == 625
 
         data = np.ones((111, 121))
         bkg = Background2D(data, box_size=10, exclude_percentile=100)
-        assert_equal(bkg.background_mesh, np.ones((12, 13)))
+        assert_allclose(bkg.background_mesh, np.ones((12, 13)))
+
+        data[:] = np.nan
+        data[0, 0] = 1.0
+        match1 = r'Input data contains non-finite \(NaN or infinity\) values'
+        match2 = r'All boxes contain .* unmasked or finite pixels'
+        ctx1 = pytest.warns(AstropyUserWarning, match=match1)
+        ctx2 = pytest.raises(ValueError, match=match2)
+        with ctx1, ctx2:
+            Background2D(data, (10, 10))
 
     def test_filter_threshold(self):
         """
@@ -385,13 +410,6 @@ class TestBackground2D:
             Background2D(DATA, (25, 25), filter_size=(1, 1),
                          coverage_mask=np.zeros((2, 2, 2)))
 
-    def test_invalid_edge_method(self):
-        match = 'edge_method must be "pad" or "crop"'
-        with (pytest.warns(AstropyDeprecationWarning),
-              pytest.raises(ValueError, match=match)):
-            Background2D(DATA, (23, 22), filter_size=(1, 1),
-                         edge_method='not_valid')
-
     @pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib is required')
     def test_plot_meshes(self):
         """
@@ -401,19 +419,23 @@ class TestBackground2D:
         bkg = Background2D(DATA, (25, 25))
         bkg.plot_meshes(outlines=True)
 
-    def test_crop(self):
-        data = np.ones((300, 500))
-        with pytest.warns(AstropyDeprecationWarning):
-            bkg = Background2D(data, (74, 99), edge_method='crop')
-        assert_allclose(bkg.background_median, 1.0)
-        assert_allclose(bkg.background_rms_median, 0.0)
-        assert_allclose(bkg.background_mesh.shape, (4, 5))
-
     def test_repr(self):
         data = np.ones((300, 500))
         bkg = Background2D(data, (74, 99))
         cls_repr = repr(bkg)
         assert cls_repr.startswith(f'{bkg.__class__.__name__}')
+
+        mask = np.zeros(data.shape, dtype=bool)
+        mask[0:10, 0:10] = True
+        bkg = Background2D(data, (74, 99), mask=mask)
+        cls_repr = repr(bkg)
+        assert cls_repr.startswith(f'{bkg.__class__.__name__}')
+        assert 'mask' in cls_repr
+
+        bkg = Background2D(data, (74, 99), coverage_mask=mask)
+        cls_repr = repr(bkg)
+        assert cls_repr.startswith(f'{bkg.__class__.__name__}')
+        assert 'coverage_mask' in cls_repr
 
     def test_str(self):
         data = np.ones((300, 500))
@@ -446,7 +468,7 @@ class TestBackground2D:
         arr2 = arr.copy()
         arr2[mask] = np.nan
         arr3 = arr2.copy()
-        match = 'Input data contains invalid values'
+        match = r'Input data contains non-finite \(NaN or infinity\) values'
         with pytest.warns(AstropyUserWarning, match=match):
             bkg2 = Background2D(arr2, box_size, mask=None,
                                 exclude_percentile=exclude_percentile,
@@ -455,4 +477,41 @@ class TestBackground2D:
         bkgimg2 = bkg2.background
         assert_equal(arr2, arr3)
 
-        assert_equal(bkgimg1, bkgimg2)
+        assert_allclose(bkgimg1, bkgimg2)
+
+    @pytest.mark.parametrize('bkg_est', [MeanBackground(),
+                                         SExtractorBackground()])
+    def test_large_boxsize(self, bkg_est):
+        """
+        Regression test to ensure that when boxsize is the same as the
+        image size that the input data left unchanged.
+        """
+        shape = (103, 107)
+        data = np.ones(shape)
+        data[50:55, 50:55] = 1000.0
+        data[20:25, 20:25] = 1000.0
+        box_size = data.shape
+        filter_size = (3, 3)
+        data_orig = data.copy()
+        bkg = Background2D(data, box_size, filter_size=filter_size,
+                           bkg_estimator=bkg_est)
+        bkgim = bkg.background
+        assert bkgim.shape == shape
+        assert_equal(data, data_orig)
+
+    def test_interpolator_keyword_deprecation(self):
+        """
+        Test that the interpolator keyword is deprecated.
+        """
+        match = 'BkgZoomInterpolator is deprecated'
+        with pytest.warns(AstropyDeprecationWarning, match=match):
+            interp = BkgZoomInterpolator()
+
+        match = '"interpolator" was deprecated'
+        with pytest.warns(AstropyDeprecationWarning, match=match):
+            bkg = Background2D(DATA, (25, 25), interpolator=interp)
+
+        assert_allclose(bkg.background, DATA)
+
+        bkg = Background2D(DATA, (25, 25))  # Should not raise
+        assert_allclose(bkg.background, DATA)

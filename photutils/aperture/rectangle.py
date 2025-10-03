@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module defines rectangular and rectangular-annulus apertures in
-both pixel and sky coordinates.
+Define rectangular and rectangular-annulus apertures in both pixel and
+sky coordinates.
 """
 
 import math
@@ -17,9 +17,13 @@ from photutils.aperture.core import PixelAperture, SkyAperture
 from photutils.aperture.mask import ApertureMask
 from photutils.geometry import rectangular_overlap_grid
 
-__all__ = ['RectangularMaskMixin', 'RectangularAperture',
-           'RectangularAnnulus', 'SkyRectangularAperture',
-           'SkyRectangularAnnulus']
+__all__ = [
+    'RectangularAnnulus',
+    'RectangularAperture',
+    'RectangularMaskMixin',
+    'SkyRectangularAnnulus',
+    'SkyRectangularAperture',
+]
 
 
 class RectangularMaskMixin:
@@ -40,25 +44,24 @@ class RectangularMaskMixin:
             aperture types. Note that the more precise methods are
             generally slower. The following methods are available:
 
-                * ``'exact'`` (default):
-                  The exact fractional overlap of the aperture and each
-                  pixel is calculated. The aperture weights will contain
-                  values between 0 and 1.
+            * ``'exact'`` (default):
+              The exact fractional overlap of the aperture and each
+              pixel is calculated. The aperture weights will contain
+              values between 0 and 1.
 
-                * ``'center'``:
-                  A pixel is considered to be entirely in or out of the
-                  aperture depending on whether its center is in or out
-                  of the aperture. The aperture weights will contain
-                  values only of 0 (out) and 1 (in).
+            * ``'center'``:
+              A pixel is considered to be entirely in or out of the
+              aperture depending on whether its center is in or out of
+              the aperture. The aperture weights will contain values
+              only of 0 (out) and 1 (in).
 
-                * ``'subpixel'``:
-                  A pixel is divided into subpixels (see the
-                  ``subpixels`` keyword), each of which are considered
-                  to be entirely in or out of the aperture depending
-                  on whether its center is in or out of the aperture.
-                  If ``subpixels=1``, this method is equivalent to
-                  ``'center'``. The aperture weights will contain values
-                  between 0 and 1.
+            * ``'subpixel'``:
+              A pixel is divided into subpixels (see the ``subpixels``
+              keyword), each of which are considered to be entirely in
+              or out of the aperture depending on whether its center is
+              in or out of the aperture. If ``subpixels=1``, this method
+              is equivalent to ``'center'``. The aperture weights will
+              contain values between 0 and 1.
 
         subpixels : int, optional
             For the ``'subpixel'`` method, resample pixels by this
@@ -85,22 +88,23 @@ class RectangularMaskMixin:
             w = self.w_out
             h = self.h_out
         else:
-            raise ValueError('Cannot determine the aperture radius.')
+            msg = 'Cannot determine the aperture radius'
+            raise ValueError(msg)
 
         masks = []
         for bbox, edges in zip(self._bbox, self._centered_edges, strict=True):
             ny, nx = bbox.shape
+            theta_rad = self.theta.to(u.radian).value
             mask = rectangular_overlap_grid(edges[0], edges[1], edges[2],
                                             edges[3], nx, ny, w, h,
-                                            self._theta_radians, 0, subpixels)
+                                            theta_rad, 0, subpixels)
 
             # subtract the inner circle for an annulus
             if hasattr(self, 'w_in'):
                 mask -= rectangular_overlap_grid(edges[0], edges[1], edges[2],
                                                  edges[3], nx, ny, self.w_in,
-                                                 self.h_in,
-                                                 self._theta_radians, 0,
-                                                 subpixels)
+                                                 self.h_in, theta_rad,
+                                                 0, subpixels)
 
             masks.append(ApertureMask(mask, bbox))
 
@@ -114,10 +118,11 @@ class RectangularMaskMixin:
         """
         Calculate half of the bounding box extents of an ellipse.
         """
+        theta_rad = theta.to(u.radian).value
         half_width = width / 2.0
         half_height = height / 2.0
-        sin_theta = math.sin(theta)
-        cos_theta = math.cos(theta)
+        sin_theta = math.sin(theta_rad)
+        cos_theta = math.cos(theta_rad)
         x_extent1 = abs((half_width * cos_theta) - (half_height * sin_theta))
         x_extent2 = abs((half_width * cos_theta) + (half_height * sin_theta))
         y_extent1 = abs((half_width * sin_theta) + (half_height * cos_theta))
@@ -135,10 +140,11 @@ class RectangularMaskMixin:
         Used for creating `~matplotlib.patches.Rectangle` patch for the
         aperture.
         """
+        theta_rad = theta.to(u.radian).value
         half_width = width / 2.0
         half_height = height / 2.0
-        sin_theta = math.sin(theta)
-        cos_theta = math.cos(theta)
+        sin_theta = math.sin(theta_rad)
+        cos_theta = math.cos(theta_rad)
         xshift = (half_height * sin_theta) - (half_width * cos_theta)
         yshift = -(half_height * cos_theta) - (half_width * sin_theta)
 
@@ -158,8 +164,8 @@ class RectangularAperture(RectangularMaskMixin, PixelAperture):
         The pixel coordinates of the aperture center(s) in one of the
         following formats:
 
-            * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
-            * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
+        * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
+        * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
 
     w : float
         The full width of the rectangle in pixels. For ``theta=0`` the
@@ -208,12 +214,11 @@ class RectangularAperture(RectangularMaskMixin, PixelAperture):
         self.positions = positions
         self.w = w
         self.h = h
-        self._theta_radians = 0.0  # defined by theta setter
         self.theta = theta
 
     @property
     def _xy_extents(self):
-        return self._calc_extents(self.w, self.h, self._theta_radians)
+        return self._calc_extents(self.w, self.h, self.theta)
 
     @property
     def area(self):
@@ -249,11 +254,11 @@ class RectangularAperture(RectangularMaskMixin, PixelAperture):
         xy_positions, patch_kwargs = self._define_patch_params(origin=origin,
                                                                **kwargs)
         xy_positions = self._lower_left_positions(xy_positions, self.w,
-                                                  self.h, self._theta_radians)
+                                                  self.h, self.theta)
 
-        theta_deg = self._theta_radians * 180.0 / np.pi
+        angle = self.theta.to(u.deg).value
         patches = [mpatches.Rectangle(xy_position, self.w, self.h,
-                                      angle=theta_deg, **patch_kwargs)
+                                      angle=angle, **patch_kwargs)
                    for xy_position in xy_positions]
 
         if self.isscalar:
@@ -299,8 +304,8 @@ class RectangularAnnulus(RectangularMaskMixin, PixelAperture):
         The pixel coordinates of the aperture center(s) in one of the
         following formats:
 
-            * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
-            * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
+        * single ``(x, y)`` pair as a tuple, list, or `~numpy.ndarray`
+        * tuple, list, or `~numpy.ndarray` of ``(x, y)`` pairs
 
     w_in : float
         The inner full width of the rectangular annulus in pixels. For
@@ -317,8 +322,9 @@ class RectangularAnnulus(RectangularMaskMixin, PixelAperture):
         The inner full height of the rectangular annulus in pixels. If
         `None`, then the inner full height is calculated as:
 
-            .. math:: h_{in} = h_{out}
-                \left(\frac{w_{in}}{w_{out}}\right)
+        .. math::
+
+            h_{in} = h_{out} \left(\frac{w_{in}}{w_{out}}\right)
 
         For ``theta=0`` the height side is along the ``y`` axis.
 
@@ -367,7 +373,8 @@ class RectangularAnnulus(RectangularMaskMixin, PixelAperture):
 
     def __init__(self, positions, w_in, w_out, h_out, h_in=None, theta=0.0):
         if not w_out > w_in:
-            raise ValueError('"w_out" must be greater than "w_in"')
+            msg = '"w_out" must be greater than "w_in"'
+            raise ValueError(msg)
 
         self.positions = positions
         self.w_in = w_in
@@ -377,15 +384,15 @@ class RectangularAnnulus(RectangularMaskMixin, PixelAperture):
         if h_in is None:
             h_in = self.w_in * self.h_out / self.w_out
         elif not h_out > h_in:
-            raise ValueError('"h_out" must be greater than "h_in"')
+            msg = '"h_out" must be greater than "h_in"'
+            raise ValueError(msg)
         self.h_in = h_in
 
-        self._theta_radians = 0.0  # defined by theta setter
         self.theta = theta
 
     @property
     def _xy_extents(self):
-        return self._calc_extents(self.w_out, self.h_out, self._theta_radians)
+        return self._calc_extents(self.w_out, self.h_out, self.theta)
 
     @property
     def area(self):
@@ -422,20 +429,20 @@ class RectangularAnnulus(RectangularMaskMixin, PixelAperture):
                                                                **kwargs)
         inner_xy_positions = self._lower_left_positions(xy_positions,
                                                         self.w_in, self.h_in,
-                                                        self._theta_radians)
+                                                        self.theta)
         outer_xy_positions = self._lower_left_positions(xy_positions,
                                                         self.w_out,
                                                         self.h_out,
-                                                        self._theta_radians)
+                                                        self.theta)
 
         patches = []
-        theta_deg = self._theta_radians * 180.0 / np.pi
+        angle = self.theta.to(u.deg).value
         for xy_in, xy_out in zip(inner_xy_positions, outer_xy_positions,
                                  strict=True):
             patch_inner = mpatches.Rectangle(xy_in, self.w_in, self.h_in,
-                                             angle=theta_deg)
+                                             angle=angle)
             patch_outer = mpatches.Rectangle(xy_out, self.w_out, self.h_out,
-                                             angle=theta_deg)
+                                             angle=angle)
             path = self._make_annulus_path(patch_inner, patch_outer)
             patches.append(mpatches.PathPatch(path, **patch_kwargs))
 
@@ -569,8 +576,9 @@ class SkyRectangularAnnulus(SkyAperture):
         The outer full height of the rectangular annulus in angular
         units. If `None`, then the inner full height is calculated as:
 
-            .. math:: h_{in} = h_{out}
-                \left(\frac{w_{in}}{w_{out}}\right)
+        .. math::
+
+            h_{in} = h_{out} \left(\frac{w_{in}}{w_{out}}\right)
 
         For ``theta=0`` the height side is along the East-West axis.
 
@@ -601,7 +609,8 @@ class SkyRectangularAnnulus(SkyAperture):
     def __init__(self, positions, w_in, w_out, h_out, h_in=None,
                  theta=0.0 * u.deg):
         if not w_out > w_in:
-            raise ValueError('"w_out" must be greater than "w_in".')
+            msg = '"w_out" must be greater than "w_in"'
+            raise ValueError(msg)
 
         self.positions = positions
         self.w_in = w_in
@@ -611,7 +620,8 @@ class SkyRectangularAnnulus(SkyAperture):
         if h_in is None:
             h_in = self.w_in * self.h_out / self.w_out
         elif not h_out > h_in:
-            raise ValueError('"h_out" must be greater than "h_in".')
+            msg = '"h_out" must be greater than "h_in"'
+            raise ValueError(msg)
         self.h_in = h_in
 
         self.theta = theta

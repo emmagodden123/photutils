@@ -1,8 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 """
-This module provides tools to build and fit an effective PSF (ePSF)
-based on Anderson and King (2000; PASP 112, 1360) and Anderson (2016;
-WFC3 ISR 2016-12).
+Define tools to build and fit an effective PSF (ePSF) based on Anderson
+and King (2000; PASP 112, 1360) and Anderson (2016; WFC3 ISR 2016-12).
 """
 
 import copy
@@ -19,13 +18,17 @@ from photutils.centroids import centroid_com
 from photutils.psf.epsf_stars import EPSFStar, EPSFStars, LinkedEPSFStar
 from photutils.psf.image_models import ImagePSF, _LegacyEPSFModel
 from photutils.psf.utils import _interpolate_missing_data
-from photutils.utils._parameters import as_pair
+from photutils.utils._parameters import (SigmaClipSentinelDefault, as_pair,
+                                         create_default_sigmaclip)
 from photutils.utils._progress_bars import add_progress_bar
 from photutils.utils._round import py2intround
 from photutils.utils._stats import nanmedian
 from photutils.utils.cutouts import _overlap_slices as overlap_slices
 
-__all__ = ['EPSFFitter', 'EPSFBuilder']
+__all__ = ['EPSFBuilder', 'EPSFFitter']
+
+
+SIGMA_CLIP = SigmaClipSentinelDefault(sigma=3.0, maxiters=10)
 
 
 class EPSFFitter:
@@ -35,7 +38,8 @@ class EPSFFitter:
     Parameters
     ----------
     fitter : `astropy.modeling.fitting.Fitter`, optional
-        A `~astropy.modeling.fitting.Fitter` object.
+        A `~astropy.modeling.fitting.Fitter` object. If `None`, then the
+        default `~astropy.modeling.fitting.TRFLSQFitter` will be used.
 
     fit_boxsize : int, tuple of int, or `None`, optional
         The size (in pixels) of the box centered on the star to be used
@@ -53,9 +57,11 @@ class EPSFFitter:
         of the input ``fitter``.
     """
 
-    def __init__(self, *, fitter=TRFLSQFitter(), fit_boxsize=5,
+    def __init__(self, *, fitter=None, fit_boxsize=5,
                  **fitter_kwargs):
 
+        if fitter is None:
+            fitter = TRFLSQFitter()
         self.fitter = fitter
         self.fitter_has_fit_info = hasattr(self.fitter, 'fit_info')
         self.fit_boxsize = as_pair('fit_boxsize', fit_boxsize,
@@ -95,7 +101,8 @@ class EPSFFitter:
             return stars
 
         if not isinstance(epsf, ImagePSF):
-            raise TypeError('The input epsf must be an ImagePSF.')
+            msg = 'The input epsf must be an ImagePSF'
+            raise TypeError(msg)
 
         epsf = _LegacyEPSFModel(epsf.data, flux=epsf.flux, x_0=epsf.x_0,
                                 y_0=epsf.y_0, oversampling=epsf.oversampling,
@@ -126,8 +133,9 @@ class EPSFFitter:
                 fitted_star.constrain_centers()
 
             else:
-                raise TypeError('stars must contain only EPSFStar and/or '
-                                'LinkedEPSFStar objects.')
+                msg = ('stars must contain only EPSFStar and/or '
+                       'LinkedEPSFStar objects')
+                raise TypeError(msg)
 
             fitted_stars.append(fitted_star)
 
@@ -265,9 +273,10 @@ class EPSFBuilder:
         each ePSF build iteration.
 
     fitter : `EPSFFitter` object, optional
-        A `EPSFFitter` object use to fit the ePSF to stars. To set
-        custom fitter options, input a new `EPSFFitter` object. See the
-        `EPSFFitter` documentation for options.
+        A `EPSFFitter` object use to fit the ePSF to stars. If `None`,
+        then the default `EPSFFitter` will be used. To set custom fitter
+        options, input a new `EPSFFitter` object. See the `EPSFFitter`
+        documentation for options.
 
     maxiters : int, optional
         The maximum number of iterations to perform.
@@ -276,8 +285,6 @@ class EPSFBuilder:
         Whether to print the progress bar during the build
         iterations. The progress bar requires that the `tqdm
         <https://tqdm.github.io/>`_ optional dependency be installed.
-        Note that the progress bar does not currently work in the
-        Jupyter console due to limitations in ``tqdm``.
 
     norm_radius : float, optional
         The pixel radius over which the ePSF is normalized.
@@ -313,13 +320,14 @@ class EPSFBuilder:
 
     def __init__(self, *, oversampling=4, shape=None,
                  smoothing_kernel='quartic', recentering_func=centroid_com,
-                 recentering_maxiters=20, fitter=EPSFFitter(), maxiters=10,
+                 recentering_maxiters=20, fitter=None, maxiters=10,
                  progress_bar=True, norm_radius=5.5,
                  recentering_boxsize=(5, 5), center_accuracy=1.0e-3,
-                 sigma_clip=SigmaClip(sigma=3, cenfunc='median', maxiters=10)):
+                 sigma_clip=SIGMA_CLIP):
 
         if oversampling is None:
-            raise ValueError("'oversampling' must be specified.")
+            msg = "'oversampling' must be specified"
+            raise ValueError(msg)
         self.oversampling = as_pair('oversampling', oversampling,
                                     lower_bound=(0, 1))
         self._norm_radius = norm_radius
@@ -335,24 +343,32 @@ class EPSFBuilder:
                                            lower_bound=(3, 0), check_odd=True)
         self.smoothing_kernel = smoothing_kernel
 
+        if fitter is None:
+            fitter = EPSFFitter()
         if not isinstance(fitter, EPSFFitter):
-            raise TypeError('fitter must be an EPSFFitter instance.')
+            msg = 'fitter must be an EPSFFitter instance'
+            raise TypeError(msg)
         self.fitter = fitter
 
         if center_accuracy <= 0.0:
-            raise ValueError('center_accuracy must be a positive number.')
+            msg = 'center_accuracy must be a positive number'
+            raise ValueError(msg)
         self.center_accuracy_sq = center_accuracy**2
 
         maxiters = int(maxiters)
         if maxiters <= 0:
-            raise ValueError("'maxiters' must be a positive number.")
+            msg = 'maxiters must be a positive number'
+            raise ValueError(msg)
         self.maxiters = maxiters
 
         self.progress_bar = progress_bar
 
+        if sigma_clip is SIGMA_CLIP:
+            sigma_clip = create_default_sigmaclip(sigma=SIGMA_CLIP.sigma,
+                                                  maxiters=SIGMA_CLIP.maxiters)
         if not isinstance(sigma_clip, SigmaClip):
-            raise TypeError('sigma_clip must be an astropy.stats.SigmaClip '
-                            'instance.')
+            msg = 'sigma_clip must be an astropy.stats.SigmaClip instance'
+            raise TypeError(msg)
         self._sigma_clip = sigma_clip
 
         # store each ePSF build iteration
@@ -394,9 +410,9 @@ class EPSFBuilder:
             # Stars class should have odd-sized dimensions, and thus we
             # get the oversampled shape as oversampling * len + 1; if
             # len=25, then newlen=101, for example.
-            x_shape = (np.ceil(stars._max_shape[0]) * oversampling[1]
+            x_shape = (np.ceil(stars._max_shape[1]) * oversampling[1]
                        + 1).astype(int)
-            y_shape = (np.ceil(stars._max_shape[1]) * oversampling[0]
+            y_shape = (np.ceil(stars._max_shape[0]) * oversampling[0]
                        + 1).astype(int)
 
             shape = np.array((y_shape, x_shape))
@@ -411,8 +427,8 @@ class EPSFBuilder:
         # the center of the pixel, so the center should be at (v.5, w.5)
         # detector pixels) value is simply the average of the two values
         # at the extremes.
-        xcenter = stars._max_shape[0] / 2.0
-        ycenter = stars._max_shape[1] / 2.0
+        xcenter = stars._max_shape[1] / 2.0
+        ycenter = stars._max_shape[0] / 2.0
 
         return _LegacyEPSFModel(data=data, origin=(xcenter, ycenter),
                                 oversampling=oversampling,
@@ -552,7 +568,8 @@ class EPSFBuilder:
                   -0.07428311]])
 
         else:
-            raise TypeError('Unsupported kernel.')
+            msg = 'Unsupported kernel'
+            raise TypeError(msg)
 
         return convolve(epsf_data, kernel)
 
@@ -674,8 +691,9 @@ class EPSFBuilder:
             The updated ePSF.
         """
         if len(stars) < 1:
-            raise ValueError('stars must contain at least one EPSFStar or '
-                             'LinkedEPSFStar object.')
+            msg = ('stars must contain at least one EPSFStar or '
+                   'LinkedEPSFStar object')
+            raise ValueError(msg)
 
         if epsf is None:
             # create an initial ePSF (array of zeros)
@@ -799,7 +817,8 @@ class EPSFBuilder:
             fit_failed = np.array([star._fit_error_status > 0
                                    for star in stars.all_stars])
             if np.all(fit_failed):
-                raise ValueError('The ePSF fitting failed for all stars.')
+                msg = 'The ePSF fitting failed for all stars.'
+                raise ValueError(msg)
 
             # permanently exclude fitting any star where the fit fails
             # after 3 iterations

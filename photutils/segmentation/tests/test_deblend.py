@@ -9,9 +9,10 @@ from astropy.modeling.models import Gaussian2D
 from astropy.utils.exceptions import AstropyUserWarning
 from numpy.testing import assert_allclose, assert_equal
 
-from photutils.segmentation.core import SegmentationImage
-from photutils.segmentation.deblend import deblend_sources
-from photutils.segmentation.detect import detect_sources
+from photutils.segmentation import (SegmentationImage, deblend_sources,
+                                    detect_sources)
+from photutils.segmentation.deblend import (_DeblendParams,
+                                            _SingleSourceDeblender)
 from photutils.utils._optional_deps import HAS_SKIMAGE
 
 
@@ -51,6 +52,7 @@ class TestDeblendSources:
         assert_allclose(len(result.data[mask1]), len(result.data[mask2]))
         assert_allclose(np.sum(self.data[mask1]), np.sum(self.data[mask2]))
         assert_allclose(np.nonzero(self.segm), np.nonzero(result))
+        assert_equal(result.deblended_labels_inverse_map, {1: [1, 2]})
 
     def test_deblend_multiple_sources(self):
         g4 = Gaussian2D(100, 50, 15, 5, 5)
@@ -192,6 +194,8 @@ class TestDeblendSources:
         result = deblend_sources(self.data, self.segm, self.npixels,
                                  mode=mode, relabel=False, progress_bar=False)
         assert result.nlabels == 2
+        assert_equal(result.labels, [2, 3])
+        assert_equal(result.deblended_labels_inverse_map, {1: [2, 3]})
         assert len(result.slices) <= result.max_label
         assert len(result.slices) == result.nlabels
         assert_allclose(np.nonzero(self.segm), np.nonzero(result))
@@ -211,7 +215,7 @@ class TestDeblendSources:
                             progress_bar=False)
 
         segm_wrong = SegmentationImage(segm_wrong)  # wrong shape
-        match = 'The data and segmentation image must have the same shape'
+        match = 'segment_img must have the same shape as data'
         with pytest.raises(ValueError, match=match):
             deblend_sources(self.data, segm_wrong, self.npixels,
                             progress_bar=False)
@@ -254,7 +258,7 @@ class TestDeblendSources:
         with pytest.warns(AstropyUserWarning, match=match):
             segm = deblend_sources(data, self.segm, self.npixels,
                                    progress_bar=False)
-            assert segm.info['warnings']['nonposmin']['input_labels'] == 1
+        assert segm.info['warnings']['nonposmin']['input_labels'] == 1
 
     def test_source_zero_min(self):
         data = self.data.copy()
@@ -263,7 +267,7 @@ class TestDeblendSources:
         with pytest.warns(AstropyUserWarning, match=match):
             segm = deblend_sources(data, self.segm, self.npixels,
                                    progress_bar=False)
-            assert segm.info['warnings']['nonposmin']['input_labels'] == 1
+        assert segm.info['warnings']['nonposmin']['input_labels'] == 1
 
     def test_connectivity(self):
         """
@@ -332,6 +336,28 @@ class TestDeblendSources:
                                  progress_bar=False)
         assert result.nlabels == 2
 
+    def test_single_source_methods(self):
+        """
+        Test the multithreshold and make_markers methods of the
+        _SingleSourceDeblender class.
+
+        These methods are useful for debugging but are not currently
+        used by the deblend_sources function.
+        """
+        data = self.data3
+        segm = self.segm3
+        npixels = 5
+        footprint = np.ones((3, 3))
+        deblend_params = _DeblendParams(npixels, footprint, 32, 0.001,
+                                        'linear')
+        single_debl = _SingleSourceDeblender(data, segm.data, 1,
+                                             deblend_params)
+        segms = single_debl.multithreshold()
+        assert len(segms) == 32
+
+        markers = single_debl.make_markers(return_all=True)
+        assert len(markers) == 19
+
 
 @pytest.mark.skipif(not HAS_SKIMAGE, reason='skimage is required')
 def test_nmarkers_fallback():
@@ -355,6 +381,6 @@ def test_nmarkers_fallback():
     match = 'The deblending mode of one or more source labels from the'
     with pytest.warns(AstropyUserWarning, match=match):
         segm2 = deblend_sources(data, segm, 1, mode='exponential')
-        assert segm2.info['warnings']['nmarkers']['input_labels'][0] == 1
-        mesg = segm2.info['warnings']['nmarkers']['message']
-        assert mesg.startswith('Deblending mode changed')
+    assert segm2.info['warnings']['nmarkers']['input_labels'][0] == 1
+    mesg = segm2.info['warnings']['nmarkers']['message']
+    assert mesg.startswith('Deblending mode changed')
