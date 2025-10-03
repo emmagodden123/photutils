@@ -569,6 +569,40 @@ class LinkedEPSFStar(EPSFStars):
             center = star.wcs_large.world_to_pixel_values(mean_lon, mean_lat)
             star.cutout_center = np.array(center) - star.origin
 
+    def constrain_fluxes(self):
+        """
+        Constrain the fluxes of linked `EPSFStar` objects (i.e., the
+        same physical star) to have the same value.
+
+        Only `EPSFStar` objects that have not been excluded during the
+        ePSF build process will be used to constrain the fluxes.
+
+        The single flux value is calculated as the mean of flux values of the linked stars.
+        """
+        if len(self._data) < 2:  # no linked stars
+            return
+
+        idx = np.logical_not(self._excluded_from_fit).nonzero()[0]
+        if idx.shape == (0,):  # pylint: disable=no-member
+            warnings.warn('Cannot constrain fluxes of linked stars because '
+                          'all the stars have been excluded during the ePSF '
+                          'build process.', AstropyUserWarning)
+            return
+
+        good_stars = [self._data[i]
+                      for i in idx]  # pylint: disable=not-an-iterable
+
+        fluxes = []
+        for star in good_stars:
+            fluxes.append(star.flux)
+
+        # compute mean flux
+        mean_flux = np.mean(fluxes)
+
+        # set the flux of each star to the mean flux
+        for star in good_stars:
+            star.flux = mean_flux
+
 
 def extract_stars(data, catalogs, *, size=(11, 11)):
     """
