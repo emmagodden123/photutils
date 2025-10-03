@@ -356,7 +356,12 @@ class EPSFStars:
         values = []
         for item in self._data:
             if isinstance(item, LinkedEPSFStar):
-                values.extend(getattr(item, attr))
+                if len(item) > 1:
+                    values.extend(getattr(item, attr))
+                elif len(item) == 1:
+                    values.append(getattr(item, attr))
+                elif len(item) == 0:
+                    continue
             else:
                 values.append(getattr(item, attr))
 
