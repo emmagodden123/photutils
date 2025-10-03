@@ -4,13 +4,14 @@ Tests for the epsf_stars module.
 """
 
 import numpy as np
+import copy
 import pytest
 from astropy.modeling.models import Moffat2D
 from astropy.nddata import NDData
 from astropy.table import Table
 from numpy.testing import assert_allclose
 
-from photutils.psf.epsf_stars import EPSFStars, extract_stars
+from photutils.psf.epsf_stars import EPSFStar, EPSFStars, extract_stars
 from photutils.psf.functional_models import CircularGaussianPRF
 from photutils.psf.image_models import ImagePSF
 
@@ -40,6 +41,19 @@ class TestExtractStars:
         assert stars.n_stars == stars.n_all_stars
         assert stars.n_stars == stars.n_good_stars
         assert stars.center.shape == (len(stars), 2)
+
+    def test_deepcopy_stars(self):
+        size = 11
+        stars = extract_stars(self.nddata, self.stars_tbl, size=size)
+        stars_copy = copy.deepcopy(stars)
+        assert len(stars) == len(stars_copy)
+        assert isinstance(stars_copy, EPSFStars)
+        for star, star_copy in zip(stars, stars_copy, strict=True):
+            assert isinstance(star_copy, EPSFStar)
+            assert star.data.shape == star_copy.data.shape
+            assert np.all(star.data == star_copy.data)
+            assert star.center.shape == star_copy.center.shape
+            assert np.all(star.center == star_copy.center)
 
     def test_extract_stars_inputs(self):
         match = 'data must be a single NDData or list of NDData objects'
