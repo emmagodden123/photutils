@@ -6,6 +6,7 @@ structures to hold the cutouts for fitting and building ePSFs.
 
 import warnings
 
+import copy
 import numpy as np
 from astropy.nddata import NDData, StdDevUncertainty
 from astropy.nddata.utils import NoOverlapError, PartialOverlapError
@@ -303,6 +304,23 @@ class EPSFStars:
         else:
             raise TypeError('stars_list must be a list of EPSFStar and/or '
                             'LinkedEPSFStar objects.')
+        
+    def __deepcopy__(self, memo):
+        # Create a new instance of the same class
+        cls = self.__class__
+        result = cls.__new__(cls)
+        # Register the object in the memo dict to avoid infinite recursion
+        memo[id(self)] = result
+
+        # Deepcopy every attribute, but give special treatment to _data
+        for k, v in self.__dict__.items():
+            if k == "_data":
+                # Safely copy the list of stars
+                result._data = [copy.deepcopy(star, memo) for star in v]
+            else:
+                setattr(result, k, copy.deepcopy(v, memo))
+
+        return result
 
     def __len__(self):
         return len(self._data)
