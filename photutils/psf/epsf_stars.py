@@ -366,6 +366,29 @@ class EPSFStars:
                 values.append(getattr(item, attr))
 
         return np.array(values)
+    
+    def constrain_linked_fluxes(self):
+        """ 
+        Constrain the fluxes of any `LinkedEPSFStar` objects in this list to 
+        have the same value. The single flux value is calculated as the mean of 
+        flux values of the linked stars.
+        """
+
+        for linked_star in self._data:
+            if not isinstance(linked_star, LinkedEPSFStar):
+                continue
+            linked_star.constrain_fluxes()
+
+    def constrain_linked_centres(self):
+        """ Constrain the centres of any `LinkedEPSFStar` objects in this list 
+        to have the same sky coordinates. The single sky coordinate is 
+        calculated as the mean of sky coordinates of the linked stars.
+        """
+
+        for linked_star in self._data:
+            if not isinstance(linked_star, LinkedEPSFStar):
+                continue
+            linked_star.constrain_centers()
 
     @property
     def cutout_center_flat(self):
