@@ -10,9 +10,9 @@ import warnings
 import numpy as np
 from astropy.modeling.fitting import TRFLSQFitter
 from astropy.nddata.utils import NoOverlapError, PartialOverlapError
-from astropy.stats import SigmaClip
+from astropy.stats import SigmaClip, sigma_clipped_stats
 from astropy.utils.exceptions import AstropyUserWarning
-from scipy.ndimage import convolve
+from scipy.ndimage import convolve, label
 
 from photutils.centroids import centroid_com
 from photutils.psf.epsf_stars import EPSFStar, EPSFStars, LinkedEPSFStar
@@ -104,12 +104,8 @@ class EPSFFitter:
             msg = 'The input epsf must be an ImagePSF'
             raise TypeError(msg)
 
-        epsf = _LegacyEPSFModel(epsf.data, flux=epsf.flux, x_0=epsf.x_0,
-                                y_0=epsf.y_0, oversampling=epsf.oversampling,
-                                fill_value=epsf.fill_value)
-
         # make a copy of the input ePSF
-        epsf = epsf.copy()
+        epsf = epsf.deepcopy()
 
         # perform the fit
         fitted_stars = []
@@ -130,7 +126,6 @@ class EPSFFitter:
                                        self.fit_boxsize))
 
                 fitted_star = LinkedEPSFStar(fitted_star)
-                fitted_star.constrain_centers()
 
             else:
                 msg = ('stars must contain only EPSFStar and/or '
@@ -215,14 +210,15 @@ class EPSFFitter:
         x_center = star.cutout_center[0] + fitted_epsf.x_0.value
         y_center = star.cutout_center[1] + fitted_epsf.y_0.value
 
-        star = copy.deepcopy(star)
-        star.cutout_center = (x_center, y_center)
-
-        # set the star's flux to the ePSF-fitted flux
-        star.flux = fitted_epsf.flux.value
-
-        star._fit_info = fit_info
-        star._fit_error_status = fit_error_status
+        if fit_error_status != 2:
+            star = copy.deepcopy(star)
+            star.cutout_center = (x_center, y_center)
+            star.flux = fitted_epsf.flux.value
+            star._fit_info = fit_info
+            star._fit_error_status = fit_error_status
+        else:
+            star = copy.deepcopy(star)
+            star._fit_error_status = fit_error_status
 
         return star
 
@@ -318,12 +314,24 @@ class EPSFBuilder:
     .. _bottleneck:  https://github.com/pydata/bottleneck
     """
 
-    def __init__(self, *, oversampling=4, shape=None,
-                 smoothing_kernel='quartic', recentering_func=centroid_com,
-                 recentering_maxiters=20, fitter=None, maxiters=10,
-                 progress_bar=True, norm_radius=5.5,
-                 recentering_boxsize=(5, 5), center_accuracy=1.0e-3,
-                 sigma_clip=SIGMA_CLIP):
+    def __init__(self, *, 
+                 oversampling=4, 
+                 shape=None,
+                 smoothing_kernel='quartic', 
+                 residual_smoothing_kernel='gaussian',
+                 recentering_func=centroid_com,
+                 recentering_maxiters=20, 
+                 fitter=None, 
+                 maxiters=10,
+                 progress_bar=True, 
+                 norm_radius=5.5,
+                 recentering_boxsize=(5, 5), 
+                 center_accuracy=1.0e-3,
+                 sigma_clip=SIGMA_CLIP, 
+                 epsf_class=ImagePSF, 
+                 gridpoint_estimation='polyfit_2nd', 
+                 epsf_nonnegative=True, 
+                 mask_background_pixels=True):
 
         if oversampling is None:
             msg = "'oversampling' must be specified"
@@ -342,6 +350,8 @@ class EPSFBuilder:
                                            recentering_boxsize,
                                            lower_bound=(3, 0), check_odd=True)
         self.smoothing_kernel = smoothing_kernel
+
+        self.residual_smoothing_kernel = residual_smoothing_kernel
 
         if fitter is None:
             fitter = EPSFFitter()
@@ -370,6 +380,23 @@ class EPSFBuilder:
             msg = 'sigma_clip must be an astropy.stats.SigmaClip instance'
             raise TypeError(msg)
         self._sigma_clip = sigma_clip
+
+        self.epsf_class = epsf_class
+        if not issubclass(self.epsf_class, ImagePSF):
+            msg = 'epsf_class must be a subclass of ImagePSF'
+            raise TypeError(msg)
+        
+        self.gridpoint_estimation = gridpoint_estimation
+        if not self.gridpoint_estimation in ['mean', 'median', 'weighted_mean',
+                                             'polyfit_2nd', 'polyfit_3rd', 
+                                             'polyfit_4th']:
+            msg = ("gridpoint_estimation must be one of 'mean', 'median', "
+                   "'weighted_mean', 'polyfit_2nd', 'polyfit_3rd', "
+                   "'polyfit_4th'")
+            raise ValueError(msg)
+        
+        self.epsf_nonnegative = bool(epsf_nonnegative)
+        self.mask_background_pixels = bool(mask_background_pixels)
 
         # store each ePSF build iteration
         self._epsf = []
@@ -422,17 +449,7 @@ class EPSFBuilder:
 
         data = np.zeros(shape, dtype=float)
 
-        # ePSF origin should be in the undersampled pixel units, not the
-        # oversampled grid units. The middle, fractional (as we wish for
-        # the center of the pixel, so the center should be at (v.5, w.5)
-        # detector pixels) value is simply the average of the two values
-        # at the extremes.
-        xcenter = stars._max_shape[1] / 2.0
-        ycenter = stars._max_shape[0] / 2.0
-
-        return _LegacyEPSFModel(data=data, origin=(xcenter, ycenter),
-                                oversampling=oversampling,
-                                norm_radius=norm_radius)
+        return self.epsf_class(data=data, oversampling=oversampling)
 
     def _resample_residual(self, star, epsf):
         """
@@ -466,27 +483,83 @@ class EPSFBuilder:
         x = star._xidx_centered
         y = star._yidx_centered
 
-        stardata = (star._data_values_normalized
-                    - epsf.evaluate(x=x, y=y, flux=1.0, x_0=0.0, y_0=0.0))
+        star_vals = star._data_values_normalized
+        epsf_vals = epsf.evaluate(x=x, y=y, flux=1.0, x_0=0.0, y_0=0.0)
 
+        if self.mask_background_pixels:
+
+            # Obtain the mean, median and standard deviation of the star cutout
+            mean, median, std = sigma_clipped_stats(star.data, sigma=3.0, maxiters=5)
+
+            # Get the threshold value for the star pixels
+            pix_threshold = median + 2.0 * std
+
+            # Mask the data which is below the threshold value
+            processed_image = np.where(star.data < pix_threshold, 0, star.data)
+
+            # Label the pixels above the threshold
+            labeled_array, num_features = label(processed_image > 0, structure=None)
+
+            # Get the label of the pixel with the maximum value
+            my_label = labeled_array[star.data == np.nanmax(star.data)][0]
+
+            # Make a mask of the pixels with the maximum label
+            star_mask = np.where(labeled_array == my_label, False, True).flatten()
+
+            # Mask the star pixels (make them nans) which are not part of the main source
+
+            star_vals_masked = np.where(star_mask, 0, star_vals)
+            stardata = (star_vals_masked - epsf_vals)
+
+        else:
+            stardata = (star_vals - epsf_vals)
+
+        # Convert pixel sample positions to the oversampled grid
         x = epsf.oversampling[1] * star._xidx_centered
         y = epsf.oversampling[0] * star._yidx_centered
 
+        # Compute the location of the ePSF centre in the oversampled grid
         epsf_xcenter, epsf_ycenter = (int((epsf.data.shape[1] - 1) / 2),
                                       int((epsf.data.shape[0] - 1) / 2))
+        
+        # Convert pixel sample positions to the indexes they belong to in the oversampled grid
         xidx = py2intround(x + epsf_xcenter)
         yidx = py2intround(y + epsf_ycenter)
 
-        resampled_img = np.full(epsf.shape, np.nan)
+        # Calculate the distance between the pixel sample position and the index it belongs to in the oversampled grid. Normalise by the maximum distance a pixel can be from the index it belongs to.
+        xdist = np.abs(x + epsf_xcenter - xidx) / 0.5
+        ydist = np.abs(y + epsf_ycenter - yidx) / 0.5
 
-        mask = np.logical_and(np.logical_and(xidx >= 0, xidx < epsf.shape[1]),
-                              np.logical_and(yidx >= 0, yidx < epsf.shape[0]))
+        # Calculate the coordinates of the pixel relative to the index it belongs to in the oversampled grid
+        x_coord = x + epsf_xcenter - xidx
+        y_coord = y + epsf_ycenter - yidx
+
+        resampled_img = np.full(epsf.data.shape, np.nan)
+        img_weights = np.full(epsf.data.shape, 0.0)
+        x_coords_img = np.full(epsf.data.shape, np.nan)
+        y_coords_img = np.full(epsf.data.shape, np.nan)
+
+        mask = np.logical_and(
+            np.logical_and(xidx >= 0, xidx < epsf.data.shape[1]),
+            np.logical_and(yidx >= 0, yidx < epsf.data.shape[0]))
         xidx_ = xidx[mask]
         yidx_ = yidx[mask]
+        xdist_ = xdist[mask]
+        ydist_ = ydist[mask] 
+        x_coord_ = x_coord[mask]
+        y_coord_ = y_coord[mask]
 
+        # Fill the resampled image with the (masked) residuals
         resampled_img[yidx_, xidx_] = stardata[mask]
 
-        return resampled_img
+        # Compute the weights for the resampling
+        img_weights[yidx_, xidx_] = 1.0 - 1/np.sqrt(2) * np.sqrt(xdist_**2 + ydist_**2)
+
+        # Compute the coordinates of the pixel relative to the index it belongs to in the oversampled grid
+        x_coords_img[yidx_, xidx_] = x_coord_
+        y_coords_img[yidx_, xidx_] = y_coord_
+
+        return resampled_img, img_weights, x_coords_img, y_coords_img
 
     def _resample_residuals(self, stars, epsf):
         """
@@ -505,12 +578,18 @@ class EPSFBuilder:
         epsf_resid : 3D `~numpy.ndarray`
             A 3D cube containing the resampled residual images.
         """
-        shape = (stars.n_good_stars, epsf.shape[0], epsf.shape[1])
+        shape = (stars.n_good_stars, epsf.data.shape[0], epsf.data.shape[1])
         epsf_resid = np.zeros(shape)
+        epsf_resid_weights = np.zeros(shape)
+        epsf_x_coords = np.zeros(shape)
+        epsf_y_coords = np.zeros(shape)
         for i, star in enumerate(stars.all_good_stars):
-            epsf_resid[i, :, :] = self._resample_residual(star, epsf)
-
-        return epsf_resid
+            resampled_img, img_weights, x_coords_img, y_coords_img = self._resample_residual(star, epsf)
+            epsf_resid[i, :, :] = resampled_img
+            epsf_resid_weights[i, :, :] = img_weights
+            epsf_x_coords[i, :, :] = x_coords_img
+            epsf_y_coords[i, :, :] = y_coords_img
+        return epsf_resid, epsf_resid_weights, epsf_x_coords, epsf_y_coords
 
     def _smooth_epsf(self, epsf_data):
         """
@@ -615,13 +694,13 @@ class EPSFBuilder:
         """
         epsf_data = epsf._data
 
-        epsf = _LegacyEPSFModel(data=epsf._data, origin=epsf.origin,
+        epsf = self.epsf_class(data=epsf.data,
                                 oversampling=epsf.oversampling,
-                                norm_radius=epsf._norm_radius, normalize=False)
+                                origin=epsf.origin)
 
         xcenter, ycenter = epsf.origin
 
-        y, x = np.indices(epsf._data.shape, dtype=float)
+        y, x = np.indices(epsf.data.shape, dtype=float)
         x /= epsf.oversampling[1]
         y /= epsf.oversampling[0]
 
@@ -644,18 +723,16 @@ class EPSFBuilder:
             # find a new center position
             xcenter_new, ycenter_new = centroid_func(epsf_cutout,
                                                      mask=mask)
-            xcenter_new /= self.oversampling[1]
-            ycenter_new /= self.oversampling[0]
 
-            xcenter_new += slices_large[1].start / self.oversampling[1]
-            ycenter_new += slices_large[0].start / self.oversampling[0]
+            xcenter_new += slices_large[1].start
+            ycenter_new += slices_large[0].start
 
             # Calculate the shift; dx = i - x_star so if dx was positively
             # incremented then x_star was negatively incremented for a given i.
             # We will therefore actually subsequently subtract dx from xcenter
             # (or x_star).
-            dx = xcenter_new - xcenter
-            dy = ycenter_new - ycenter
+            dx = (xcenter_new - xcenter) / epsf.oversampling[1]
+            dy = (ycenter_new - ycenter) / epsf.oversampling[0]
 
             center_dist_sq = dx**2 + dy**2
 
@@ -666,13 +743,16 @@ class EPSFBuilder:
             dx_total += dx
             dy_total += dy
 
+            new_x_0 = (xcenter / epsf.oversampling[1]) - dx_total
+            new_y_0 = (ycenter / epsf.oversampling[0]) - dy_total
+
             epsf_data = epsf.evaluate(x=x, y=y, flux=1.0,
-                                      x_0=xcenter - dx_total,
-                                      y_0=ycenter - dy_total)
+                                      x_0=new_x_0,
+                                      y_0=new_y_0)
 
         return epsf_data
 
-    def _build_epsf_step(self, stars, epsf=None):
+    def _build_epsf_step(self, stars, epsf=None, residual_smoothing=None):
         """
         A single iteration of improving an ePSF.
 
@@ -703,15 +783,155 @@ class EPSFBuilder:
             epsf = copy.deepcopy(epsf)
 
         # compute a 3D stack of 2D residual images
-        residuals = self._resample_residuals(stars, epsf)
+        residuals, weights, x_coords, y_coords = self._resample_residuals(stars, epsf)
 
         # compute the sigma-clipped average along the 3D stack
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
             warnings.simplefilter('ignore', category=AstropyUserWarning)
-            residuals = self._sigma_clip(residuals, axis=0, masked=False,
-                                         return_bounds=False)
-            residuals = nanmedian(residuals, axis=0)
+
+            if self.gridpoint_estimation == 'mean':
+                residuals = self._sigma_clip(residuals, axis=0, masked=False,
+                                            return_bounds=False)
+                residuals = np.nanmean(residuals, axis=0)
+
+            elif self.gridpoint_estimation == 'median':
+                residuals = self._sigma_clip(residuals, axis=0, masked=False,
+                                            return_bounds=False)
+                residuals = nanmedian(residuals, axis=0)
+
+            elif self.gridpoint_estimation == 'weighted_mean':
+                # Create a masked array to perform sigma clipping
+                residuals = self._sigma_clip(residuals, axis=0, masked=True,
+                             return_bounds=False)
+                # Fill masked values with np.nan
+                residuals = residuals.filled(np.nan)
+                # Created masked weights array with same mask as residuals
+                weights = np.ma.masked_array(weights, mask=np.isnan(residuals))
+                # Fill masked weight values with np.nan
+                weights = weights.filled(np.nan)
+                # Iterate over the residuals and weights to calculate the weighted average
+                residuals = np.nansum(residuals * weights, axis=0) / np.nansum(weights, axis=0)
+
+            elif self.gridpoint_estimation == 'polyfit_2nd':
+                # Fit a 2D surface to the residuals for each gridsection
+                # Assume residuals, x_coords, y_coords are already defined
+                N, M, M = residuals.shape  # Shape of the input 3D matrices
+                fitted_matrix = np.full((M, M), np.nan)  # Initialize with NaNs
+
+                for i in range(M):
+                    for j in range(M):
+                        # Extract valid samples across N slices
+                        valid_mask = ~np.isnan(residuals[:, i, j])
+                        x_samples = x_coords[valid_mask, i, j]
+                        y_samples = y_coords[valid_mask, i, j]
+                        z_samples = residuals[valid_mask, i, j]
+                        
+                        num_samples = len(z_samples)
+                        if num_samples == 1:
+                            fitted_matrix[i, j] = z_samples[0]  # Use single value directly
+                        elif num_samples > 1 and num_samples <= 5:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+                        elif num_samples > 5:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+
+                residuals = fitted_matrix
+
+            elif self.gridpoint_estimation == 'polyfit_3':
+            
+                # Fit a 2D surface to the residuals for each gridsection
+                # Assume residuals, x_coords, y_coords are already defined
+                N, M, M = residuals.shape  # Shape of the input 3D matrices
+                fitted_matrix = np.full((M, M), np.nan)  # Initialize with NaNs
+
+                for i in range(M):
+                    for j in range(M):
+                        # Extract valid samples across N slices
+                        valid_mask = ~np.isnan(residuals[:, i, j])
+                        x_samples = x_coords[valid_mask, i, j]
+                        y_samples = y_coords[valid_mask, i, j]
+                        z_samples = residuals[valid_mask, i, j]
+                        
+                        num_samples = len(z_samples)
+                        if num_samples == 1:
+                            fitted_matrix[i, j] = z_samples[0]  # Use single value directly
+                        elif num_samples > 1 and num_samples <= 5:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+                        elif num_samples > 5 and num_samples <= 10:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+                        elif num_samples > 10:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2,
+                                x_samples**3, x_samples**2 * y_samples, x_samples * y_samples**2, y_samples**3
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+
+                residuals = fitted_matrix
+
+            elif self.gridpoint_estimation == 'polyfit_4':
+                
+                # Fit a 2D surface to the residuals for each gridsection
+                # Assume residuals, x_coords, y_coords are already defined
+                N, M, M = residuals.shape  # Shape of the input 3D matrices
+                fitted_matrix = np.full((M, M), np.nan)  # Initialize with NaNs
+
+                for i in range(M):
+                    for j in range(M):
+                        # Extract valid samples across N slices
+                        valid_mask = ~np.isnan(residuals[:, i, j])
+                        x_samples = x_coords[valid_mask, i, j]
+                        y_samples = y_coords[valid_mask, i, j]
+                        z_samples = residuals[valid_mask, i, j]
+                        
+                        num_samples = len(z_samples)
+                        if num_samples == 1:
+                            fitted_matrix[i, j] = z_samples[0]  # Use single value directly
+                        elif num_samples > 1 and num_samples <= 5:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+                        elif num_samples > 5 and num_samples <= 10:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+                        elif num_samples > 10 and num_samples <= 20:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2,
+                                x_samples**3, x_samples**2 * y_samples, x_samples * y_samples**2, y_samples**3
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+                        elif num_samples > 20:
+                            A = np.column_stack( (
+                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2,
+                                x_samples**3, x_samples**2 * y_samples, x_samples * y_samples**2, y_samples**3,
+                                x_samples**4, x_samples**3 * y_samples, x_samples**2 * y_samples**2, x_samples * y_samples**3, y_samples**4
+                            ))
+                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
+                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
+
+                residuals = fitted_matrix
 
         # interpolate any missing data (np.nan)
         mask = ~np.isfinite(residuals)
@@ -722,29 +942,51 @@ class EPSFBuilder:
             # fill any remaining nans (outer points) with zeros
             residuals[~np.isfinite(residuals)] = 0.0
 
+        if residual_smoothing is not None:
+            # Smooth the residuals
+            residuals = convolve(residuals, residual_smoothing)
+
         # add the residuals to the previous ePSF image
-        new_epsf = epsf._data + residuals
+        new_epsf_data = epsf.data + residuals
+
+        if self.constrain_nonnegative:
+            # Constrain the ePSF model to be non-negative
+            new_epsf_data = np.clip(new_epsf_data, 0.0, None)
 
         # smooth and recenter the ePSF
-        new_epsf = self._smooth_epsf(new_epsf)
+        smoothed_data = self._smooth_epsf(new_epsf_data)
 
-        epsf = _LegacyEPSFModel(data=new_epsf, origin=epsf.origin,
+        epsf = self.epsf_class(data=smoothed_data,
                                 oversampling=epsf.oversampling,
-                                norm_radius=epsf._norm_radius, normalize=False)
+                                origin=epsf.origin)
 
-        epsf._data = self._recenter_epsf(
+        recentered_data = self._recenter_epsf(
             epsf, centroid_func=self.recentering_func,
             box_size=self.recentering_boxsize,
             maxiters=self.recentering_maxiters)
+        
+        # Make sure there are no negative values after recentering
+        if self.constrain_nonnegative:
+            recentered_data = np.clip(recentered_data, 0.0, None)
 
-        # Return the new ePSF object, but with undersampled grid pixel
-        # coordinates.
-        xcenter = (epsf._data.shape[1] - 1) / 2.0 / epsf.oversampling[1]
-        ycenter = (epsf._data.shape[0] - 1) / 2.0 / epsf.oversampling[0]
+        # Normalise the ePSF such that a star with true flux 1.0 positioned at the centre of a pixel will have an aperture sum of 1.0
+        norm_idxs_x = []
+        shape = recentered_data.shape
+        for i in range(int(shape[1]/self.oversampling[1])):
+            norm_idxs_x.append(self.oversampling[1] * i + 
+                               int(self.oversampling[1]/2))
+        norm_idxs_y = []
+        for i in range(int(shape[0]/self.oversampling[0])):
+            norm_idxs_y.append(self.oversampling[0] * i + 
+                               int(self.oversampling[0]/2))
+        norm_sum = np.sum(recentered_data[norm_idxs_y, :][:, norm_idxs_x])
+        recentered_data /= norm_sum
 
-        return _LegacyEPSFModel(data=epsf._data, origin=(xcenter, ycenter),
+        return_epsf = self.epsf_class(data=recentered_data,
                                 oversampling=epsf.oversampling,
-                                norm_radius=epsf._norm_radius)
+                                origin=epsf.origin)
+
+        return return_epsf
 
     def build_epsf(self, stars, *, init_epsf=None):
         """
@@ -783,10 +1025,13 @@ class EPSFBuilder:
         if epsf is None:
             legacy_epsf = None
         else:
-            legacy_epsf = _LegacyEPSFModel(epsf.data, flux=epsf.flux,
-                                           x_0=epsf.x_0, y_0=epsf.y_0,
-                                           oversampling=epsf.oversampling,
-                                           fill_value=epsf.fill_value)
+            legacy_epsf = self.epsf_class(epsf.data, flux=epsf.flux,
+                                           x_0=epsf.x_0, y_0=epsf.y_0, origin=epsf.origin,
+                                           oversampling=epsf.oversampling)
+            
+        # Initial constrain centres and fluxes of linked stars
+        stars.constrain_linked_centres()
+        stars.constrain_linked_fluxes()
 
         while (iter_num < self.maxiters and not np.all(fit_failed)
                and np.max(center_dist_sq) >= self.center_accuracy_sq):
@@ -794,7 +1039,7 @@ class EPSFBuilder:
             iter_num += 1
 
             # build/improve the ePSF
-            legacy_epsf = self._build_epsf_step(stars, epsf=legacy_epsf)
+            legacy_epsf = self._build_epsf_step(stars, epsf=legacy_epsf, residual_smoothing=self.residual_smoothing_kernel)
 
             # fit the new ePSF to the stars to find improved centers
             # we catch fit warnings here -- stars with unsuccessful fits
@@ -804,14 +1049,16 @@ class EPSFBuilder:
                 warnings.filterwarnings('ignore', message=message,
                                         category=AstropyUserWarning)
 
-                image_psf = ImagePSF(data=legacy_epsf.data,
-                                     flux=legacy_epsf.flux,
-                                     x_0=legacy_epsf.x_0,
-                                     y_0=legacy_epsf.y_0,
+                image_psf = self.epsf_class(data=legacy_epsf.data,
+                                     origin=legacy_epsf.origin,
                                      oversampling=legacy_epsf.oversampling,
                                      fill_value=legacy_epsf.fill_value)
 
                 stars = self.fitter(image_psf, stars)
+
+                # Constrain centres and fluxes
+                stars.constrain_linked_centres()
+                stars.constrain_linked_fluxes()
 
             # find all stars where the fit failed
             fit_failed = np.array([star._fit_error_status > 0
@@ -846,7 +1093,7 @@ class EPSFBuilder:
                            'iterations)')
             pbar.close()
 
-        epsf = ImagePSF(data=legacy_epsf.data, flux=legacy_epsf.flux,
+        epsf = self.epsf_class(data=legacy_epsf.data, flux=legacy_epsf.flux,
                         x_0=legacy_epsf.x_0, y_0=legacy_epsf.y_0,
                         oversampling=legacy_epsf.oversampling,
                         fill_value=legacy_epsf.fill_value)
