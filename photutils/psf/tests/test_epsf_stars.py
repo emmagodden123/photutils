@@ -11,7 +11,7 @@ from astropy.nddata import NDData
 from astropy.table import Table
 from numpy.testing import assert_allclose
 
-from photutils.psf.epsf_stars import EPSFStar, EPSFStars, LinkedEPSFStar, extract_stars
+from photutils.psf.epsf_stars import EPSFStar, EPSFStars, extract_stars
 from photutils.psf.functional_models import CircularGaussianPRF
 from photutils.psf.image_models import ImagePSF
 
@@ -19,9 +19,8 @@ from photutils.psf.image_models import ImagePSF
 class TestExtractStars:
     def setup_class(self):
         stars_tbl = Table()
-        stars_tbl['x'] = [15, 15, 15, 35, 35]
-        stars_tbl['y'] = [15, 15, 35, 40, 10]
-        stars_tbl['id'] = [1, 1, 2, 3, 4]
+        stars_tbl['x'] = [15, 15, 35, 35]
+        stars_tbl['y'] = [15, 35, 40, 10]
         self.stars_tbl = stars_tbl
 
         yy, xx = np.mgrid[0:51, 0:55]
@@ -35,7 +34,7 @@ class TestExtractStars:
     def test_extract_stars(self):
         size = 11
         stars = extract_stars(self.nddata, self.stars_tbl, size=size)
-        assert len(stars) == 5
+        assert len(stars) == 4
         assert isinstance(stars, EPSFStars)
         assert isinstance(stars[0], EPSFStars)
         assert stars[0].data.shape == (size, size)
@@ -55,17 +54,6 @@ class TestExtractStars:
             assert np.all(star.data == star_copy.data)
             assert star.center.shape == star_copy.center.shape
             assert np.all(star.center == star_copy.center)
-
-    def test_constrain_linked_stars(self):
-        size = 11
-        stars = extract_stars(self.nddata, self.stars_tbl, size=size)
-        stars.constrain_linked_fluxes()
-        stars.constrain_linked_centres()
-        for star in stars:
-            if isinstance(star, LinkedEPSFStar):
-                assert np.all(star['flux'] == star['flux'][0])
-                assert np.all(star['x_0'] == star['x_0'][0])
-                assert np.all(star['y_0'] == star['y_0'][0])
 
     def test_extract_stars_inputs(self):
         match = 'data must be a single NDData or list of NDData objects'
