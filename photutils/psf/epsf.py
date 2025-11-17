@@ -10,6 +10,7 @@ import warnings
 import numpy as np
 from astropy.modeling.fitting import TRFLSQFitter
 from astropy.nddata.utils import NoOverlapError, PartialOverlapError
+from astropy.convolution import Gaussian2DKernel
 from astropy.stats import SigmaClip, sigma_clipped_stats
 from astropy.utils.exceptions import AstropyUserWarning
 from scipy.ndimage import convolve, label
@@ -235,6 +236,9 @@ class EPSFBuilder:
     <https://ui.adsabs.harvard.edu/abs/2016wfc..rept...12A/abstract>`_
     for details.
 
+    See `Godden and Blundell (2025; RASTI (in prep))`_ for details on
+    additions to ePSF building strategies.
+
     Parameters
     ----------
     oversampling : int or array_like (int)
@@ -257,6 +261,12 @@ class EPSFBuilder:
         from fourth and second degree polynomials, respectively.
         Alternatively, a custom 2D array can be input. If `None` then no
         smoothing will be performed.
+
+    residual_smoothing_kernel : {'gaussian'}, 2D `~numpy.ndarray`, or `None`
+        The smoothing kernel to apply to the ePSF residuals. The only
+        predefined option is ``'gaussian'``, which applies a Gaussian
+        smoothing kernel. Alternatively, a custom 2D array can be input. If
+        `None` then no smoothing of the residuals will be performed.
 
     recentering_func : callable, optional
         A callable object (e.g., function or class) that is used to
@@ -284,6 +294,10 @@ class EPSFBuilder:
         iterations. The progress bar requires that the `tqdm
         <https://tqdm.github.io/>`_ optional dependency be installed.
 
+    normalise_epsf : bool, optional
+        If `True`, the ePSF will be normalized after each iteration.
+        Default is `True`.
+
     norm_radius : float, optional
         The pixel radius over which the ePSF is normalized.
 
@@ -308,6 +322,36 @@ class EPSFBuilder:
         when stacking the ePSF residuals in each iteration step. If
         `None` then no sigma clipping will be performed.
 
+    epsf_class : subclass of `ImagePSF`, optional
+        A subclass of `ImagePSF` to use for the ePSF for using alternative
+        interpolation methods between gridpoints. If `None`, then the
+        default `ImagePSF` class will be used.
+
+    gridpoint_estimation : {'mean', 'median', 'weighted_mean', 'polyfit'}, 
+                            optional
+        The method used to estimate the value of each ePSF gridpoint. The 
+        default option is 'polyfit'. The
+        options are:
+        'mean' : Use the sigma-clipped mean of all the contributing pixel 
+        values.
+        'median' : Use the sigma-clipped median of all the contributing pixel 
+        values.
+        'weighted_mean' : Use the sigma-clipped weighted mean of all the contributing pixel values, where the weights are determined by the distance of each pixel from the gridpoint.
+        'polyfit' : Use a polynomial fit over the contributing pixel values to estimate the value of each ePSF gridpoint.
+
+    epsf_nonnegative : bool, optional
+        If `True`, any negative values in the ePSF will be set to zero
+        after each iteration. Default is `True`.
+
+    mask_background_pixels : bool, optional
+        If `True`, pixels that are likely to be background (not part of
+        the star) will be masked when calculating the ePSF residuals.
+        This is done by thresholding the star image based on its
+        sigma-clipped statistics, labeling the sources above the
+        threshold, and masking all but the largest source. Default is
+        `True`.
+
+
     Notes
     -----
     If your image contains NaN values, you may see better performance if
@@ -326,6 +370,7 @@ class EPSFBuilder:
                  fitter=None, 
                  maxiters=10,
                  progress_bar=True, 
+                 normalise_epsf=True,
                  norm_radius=5.5,
                  recentering_boxsize=(5, 5), 
                  center_accuracy=1.0e-3,
@@ -352,6 +397,20 @@ class EPSFBuilder:
                                            recentering_boxsize,
                                            lower_bound=(3, 0), check_odd=True)
         self.smoothing_kernel = smoothing_kernel
+
+        if residual_smoothing_kernel == 'gaussian':
+            self.residual_smoothing = Gaussian2DKernel(x_stddev=1,
+                                                  y_stddev=1,
+                                                  x_size=self.oversampling[1],
+                                                  y_size=self.oversampling[0])
+        elif isinstance(residual_smoothing_kernel, np.ndarray):
+            self.residual_smoothing = residual_smoothing_kernel
+        elif residual_smoothing_kernel is None:
+            self.residual_smoothing = None
+        else:
+            msg = ("residual_smoothing_kernel must be 'gaussian', a 2D "
+                   "numpy array, or None")
+            raise ValueError(msg)
 
         self.residual_smoothing_kernel = residual_smoothing_kernel
 
@@ -390,11 +449,9 @@ class EPSFBuilder:
         
         self.gridpoint_estimation = gridpoint_estimation
         if not self.gridpoint_estimation in ['mean', 'median', 'weighted_mean',
-                                             'polyfit_2nd', 'polyfit_3rd', 
-                                             'polyfit_4th']:
+                                             'polyfit']:
             msg = ("gridpoint_estimation must be one of 'mean', 'median', "
-                   "'weighted_mean', 'polyfit_2nd', 'polyfit_3rd', "
-                   "'polyfit_4th'")
+                   "'weighted_mean', 'polyfit'")
             raise ValueError(msg)
         
         self.epsf_nonnegative = bool(epsf_nonnegative)
@@ -753,8 +810,62 @@ class EPSFBuilder:
                                       y_0=new_y_0)
 
         return epsf_data
+    
+    def _normalise_epsf(self, epsf, box_size=None):
+        """
+        Normalize the ePSF data.
 
-    def _build_epsf_step(self, stars, epsf=None, residual_smoothing=None):
+        Parameters
+        ----------
+        epsf: ImagePSF object
+            The ePSF model.
+
+        box_size : float or tuple of two floats, optional
+            The size (in pixels) of the box used to normalize the
+            ePSF. If a single integer number is provided, then a square
+            box will be used. If two values are provided, then they
+            must be in ``(ny, nx)`` order. If `None`, then a box size
+            equal to the shape of the ePSF data will be used.
+
+        Returns
+        -------
+        result : 2D `~numpy.ndarray`
+            The normalized ePSF data.
+        """
+
+        # Get the box size for normalizing the ePSF
+        if box_size is None:
+            box_size = epsf.data.shape / self.oversampling
+        else:
+            box_size = as_pair('box_size', box_size,
+                               lower_bound=(3, 3), check_odd=False)
+            
+        # Check that box size is >= 3
+        if box_size[0] < 3 or box_size[1] < 3:
+            msg = 'box_size values must be >= 3'
+            raise ValueError(msg)
+            
+        # Get the pixel positions at which to normalize the ePSF
+        half_x = int(np.floor(box_size[1]/2))
+        half_y = int(np.floor(box_size[0]/2))
+        norm_x = np.arange(-half_x, half_x + 1)
+        norm_y = np.arange(-half_y, half_y + 1)
+
+        yy, xx = np.meshgrid(norm_y, norm_x)
+
+        # Evaluate the ePSF at these pixel positions
+        epsf_values = epsf.evaluate(x=xx, y=yy, flux=1.0, x_0=0.0, y_0=0.0)
+
+        # Normalize the ePSF data
+        total = np.nansum(epsf_values)
+        if total > 0.0:
+            epsf_data = epsf.data / total
+        else:
+            epsf_data = epsf.data
+
+        return epsf_data
+
+    def _build_epsf_step(self, stars, epsf=None):
         """
         A single iteration of improving an ePSF.
 
@@ -815,8 +926,9 @@ class EPSFBuilder:
                 # Iterate over the residuals and weights to calculate the weighted average
                 residuals = np.nansum(residuals * weights, axis=0) / np.nansum(weights, axis=0)
 
-            elif self.gridpoint_estimation == 'polyfit_2nd':
-                # Fit a 2D surface to the residuals for each gridsection
+            elif self.gridpoint_estimation == 'polyfit':
+                # Fit a 2D quadratic polynomialsurface to the residuals for
+                # each gridsection.
                 # Assume residuals, x_coords, y_coords are already defined
                 N, M, M = residuals.shape  # Shape of the input 3D matrices
                 fitted_matrix = np.full((M, M), np.nan)  # Initialize with NaNs
@@ -847,93 +959,9 @@ class EPSFBuilder:
 
                 residuals = fitted_matrix
 
-            elif self.gridpoint_estimation == 'polyfit_3':
-            
-                # Fit a 2D surface to the residuals for each gridsection
-                # Assume residuals, x_coords, y_coords are already defined
-                N, M, M = residuals.shape  # Shape of the input 3D matrices
-                fitted_matrix = np.full((M, M), np.nan)  # Initialize with NaNs
-
-                for i in range(M):
-                    for j in range(M):
-                        # Extract valid samples across N slices
-                        valid_mask = ~np.isnan(residuals[:, i, j])
-                        x_samples = x_coords[valid_mask, i, j]
-                        y_samples = y_coords[valid_mask, i, j]
-                        z_samples = residuals[valid_mask, i, j]
-                        
-                        num_samples = len(z_samples)
-                        if num_samples == 1:
-                            fitted_matrix[i, j] = z_samples[0]  # Use single value directly
-                        elif num_samples > 1 and num_samples <= 5:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-                        elif num_samples > 5 and num_samples <= 10:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-                        elif num_samples > 10:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2,
-                                x_samples**3, x_samples**2 * y_samples, x_samples * y_samples**2, y_samples**3
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-
-                residuals = fitted_matrix
-
-            elif self.gridpoint_estimation == 'polyfit_4':
-                
-                # Fit a 2D surface to the residuals for each gridsection
-                # Assume residuals, x_coords, y_coords are already defined
-                N, M, M = residuals.shape  # Shape of the input 3D matrices
-                fitted_matrix = np.full((M, M), np.nan)  # Initialize with NaNs
-
-                for i in range(M):
-                    for j in range(M):
-                        # Extract valid samples across N slices
-                        valid_mask = ~np.isnan(residuals[:, i, j])
-                        x_samples = x_coords[valid_mask, i, j]
-                        y_samples = y_coords[valid_mask, i, j]
-                        z_samples = residuals[valid_mask, i, j]
-                        
-                        num_samples = len(z_samples)
-                        if num_samples == 1:
-                            fitted_matrix[i, j] = z_samples[0]  # Use single value directly
-                        elif num_samples > 1 and num_samples <= 5:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-                        elif num_samples > 5 and num_samples <= 10:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-                        elif num_samples > 10 and num_samples <= 20:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2,
-                                x_samples**3, x_samples**2 * y_samples, x_samples * y_samples**2, y_samples**3
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-                        elif num_samples > 20:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2,
-                                x_samples**3, x_samples**2 * y_samples, x_samples * y_samples**2, y_samples**3,
-                                x_samples**4, x_samples**3 * y_samples, x_samples**2 * y_samples**2, x_samples * y_samples**3, y_samples**4
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-
-                residuals = fitted_matrix
+            else:
+                msg = 'Unsupported gridpoint_estimation method'
+                raise TypeError(msg)
 
         # interpolate any missing data (np.nan)
         mask = ~np.isfinite(residuals)
@@ -944,9 +972,9 @@ class EPSFBuilder:
             # fill any remaining nans (outer points) with zeros
             residuals[~np.isfinite(residuals)] = 0.0
 
-        if residual_smoothing is not None:
+        if self.residual_smoothing is not None:
             # Smooth the residuals
-            residuals = convolve(residuals, residual_smoothing)
+            residuals = convolve(residuals, self.residual_smoothing)
 
         # add the residuals to the previous ePSF image
         new_epsf_data = epsf.data + residuals
@@ -971,18 +999,14 @@ class EPSFBuilder:
         if self.constrain_nonnegative:
             recentered_data = np.clip(recentered_data, 0.0, None)
 
-        # Normalise the ePSF such that a star with true flux 1.0 positioned at the centre of a pixel will have an aperture sum of 1.0
-        norm_idxs_x = []
-        shape = recentered_data.shape
-        for i in range(int(shape[1]/self.oversampling[1])):
-            norm_idxs_x.append(self.oversampling[1] * i + 
-                               int(self.oversampling[1]/2))
-        norm_idxs_y = []
-        for i in range(int(shape[0]/self.oversampling[0])):
-            norm_idxs_y.append(self.oversampling[0] * i + 
-                               int(self.oversampling[0]/2))
-        norm_sum = np.sum(recentered_data[norm_idxs_y, :][:, norm_idxs_x])
-        recentered_data /= norm_sum
+        epsf = self.epsf_class(data=recentered_data,
+                                oversampling=epsf.oversampling,
+                                origin=epsf.origin)
+        
+        if self.normalise_epsf:
+            normalised_data = self._normalise_epsf(epsf, box_size=self._norm_radius)
+        else:
+            normalised_data = recentered_data
 
         return_epsf = self.epsf_class(data=recentered_data,
                                 oversampling=epsf.oversampling,
@@ -1032,16 +1056,30 @@ class EPSFBuilder:
                                            oversampling=epsf.oversampling)
             
         # Initial constrain centres and fluxes of linked stars
-        stars.constrain_linked_centres()
-        stars.constrain_linked_fluxes()
+        if isinstance(stars, LinkedEPSFStar):
+            stars.constrain_linked_centres()
+            stars.constrain_linked_fluxes()
+        elif isinstance(stars, EPSFStars):
+            for star in stars.all_stars:
+                if isinstance(star, LinkedEPSFStar):
+                    star.constrain_linked_centres()
+                    star.constrain_linked_fluxes()
 
         while (iter_num < self.maxiters and not np.all(fit_failed)
                and np.max(center_dist_sq) >= self.center_accuracy_sq):
 
             iter_num += 1
 
+            if iter_num == 1 and self.residual_smoothing_kernel is not None:
+                # Do not use residual smoothing in the first iteration
+                residual_smoothing_backup = self.residual_smoothing
+                self.residual_smoothing = None
+            elif iter_num == 2 and self.residual_smoothing_kernel is not None:
+                # Restore residual smoothing after the first iteration
+                self.residual_smoothing = residual_smoothing_backup
+
             # build/improve the ePSF
-            legacy_epsf = self._build_epsf_step(stars, epsf=legacy_epsf, residual_smoothing=self.residual_smoothing_kernel)
+            legacy_epsf = self._build_epsf_step(stars, epsf=legacy_epsf)
 
             # fit the new ePSF to the stars to find improved centers
             # we catch fit warnings here -- stars with unsuccessful fits
@@ -1059,8 +1097,14 @@ class EPSFBuilder:
                 stars = self.fitter(image_psf, stars)
 
                 # Constrain centres and fluxes
-                stars.constrain_linked_centres()
-                stars.constrain_linked_fluxes()
+                if isinstance(stars, LinkedEPSFStar):
+                    stars.constrain_linked_centres()
+                    stars.constrain_linked_fluxes()
+                elif isinstance(stars, EPSFStars):
+                    for star in stars.all_stars:
+                        if isinstance(star, LinkedEPSFStar):
+                            star.constrain_linked_centres()
+                            star.constrain_linked_fluxes()
 
             # find all stars where the fit failed
             fit_failed = np.array([star._fit_error_status > 0
