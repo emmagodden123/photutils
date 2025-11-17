@@ -4,8 +4,26 @@
 General
 ^^^^^^^
 
+- The minimum required NumPy is now 2.0. [#2115]
+
+- The minimum required SciPy is now 1.13. [#2121]
+
+- The minimum required Matplotlib is now 3.9. [#2115]
+
+- The minimum required scikit-image is now 0.23. [#2115]
+
 New Features
 ^^^^^^^^^^^^
+
+- ``photutils.background``
+
+  - Added a ``to_aperture`` method to ``LocalBackground``. [#2118]
+
+- ``photutils.psf``
+
+  - Added a ``SourceGroups`` class that stores the results of grouping
+    sources and provides methods to analyze and plot the groupings.
+    [#2116]
 
 Bug Fixes
 ^^^^^^^^^
@@ -38,6 +56,9 @@ API Changes
 
   - Removed the deprecated ``IntegratedGaussianPRF`` and ``PRFAdapter``
     classes. [#2103]
+
+  - The ``grid_from_epsfs`` helper function is now deprecated. Instead,
+    use ``GriddedPSFModel`` directly. [#2111]
 
 
 2.3.0 (2025-09-15)
@@ -399,7 +420,7 @@ Bug Fixes
     value. [#1934]
 
   - Fixed an issue in ``Background2D`` where if the ``box_size`` equals
-    the input array shape the input data array could be modified. [#1935]
+    the input array shape, the input data array could be modified. [#1935]
 
 
 2.0.0 (2024-10-14)

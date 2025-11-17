@@ -20,7 +20,6 @@ from astropy.utils.exceptions import AstropyUserWarning
 from photutils.background import LocalBackground
 from photutils.psf._components import (PSFDataProcessor, PSFFitter,
                                        PSFResultsAssembler)
-from photutils.psf.groupers import SourceGrouper
 from photutils.psf.utils import (ModelImageMixin, _create_call_docstring,
                                  _get_psf_model_main_params, _make_mask,
                                  _validate_psf_model)
@@ -263,7 +262,7 @@ class PSFPhotometry(ModelImageMixin):
         are those that overlap with their neighbors. Sources that are
         grouped are fit simultaneously. The ``grouper`` must accept
         the x and y coordinates of the sources and return an integer
-        array of the group id numbers (starting from 1) indicating
+        array of the group ID numbers (starting from 1) indicating
         the group in which a given source belongs. If `None`, then no
         grouping is performed, i.e. each source is fit independently.
         The ``group_id`` values in ``init_params`` override this
@@ -369,6 +368,9 @@ class PSFPhotometry(ModelImageMixin):
     in a group exceeds the ``group_warning_threshold`` value.
     """
 
+    # Default value for parameter initialization (invalid sources)
+    DEFAULT_PARAM_VALUE = np.nan
+
     def __init__(self, psf_model, fit_shape, *, finder=None, grouper=None,
                  fitter=None, fitter_maxiters=100, xy_bounds=None,
                  aperture_radius=None, localbkg_estimator=None,
@@ -380,7 +382,7 @@ class PSFPhotometry(ModelImageMixin):
         self.fit_shape = as_pair('fit_shape', fit_shape, lower_bound=(1, 0),
                                  check_odd=True)
         self.finder = self._validate_callable(finder, 'finder')
-        self.grouper = self._validate_grouper(grouper)
+        self.grouper = self._validate_callable(grouper, 'grouper')
         if fitter is None:
             fitter = TRFLSQFitter()
         self.fitter = self._validate_callable(fitter, 'fitter')
@@ -472,7 +474,7 @@ class PSFPhotometry(ModelImageMixin):
 
         # Initialize model parameter storage directly
         self._init_model_param_storage(n_sources)
-        self.fit_info = [{}] * n_sources
+        self.fit_info = [{} for _ in range(n_sources)]
 
     def _init_model_param_storage(self, n_sources):
         """
@@ -484,15 +486,13 @@ class PSFPhotometry(ModelImageMixin):
         """
         # get all parameter names from the PSF model
         model_params = list(self.psf_model.param_names)
-        flux_param = self._param_mapper.alias_to_model_param['flux']
 
         # initialize parameter value storage
         param_data = {}
         for model_param in model_params:
-            # initialize with appropriate defaults
-            default_val = (0.0 if model_param == flux_param else np.nan)
-
-            param_data[model_param] = np.full(n_sources, default_val)
+            # initialize all parameters with np.nan (for invalid sources)
+            param_data[model_param] = np.full(n_sources,
+                                              self.DEFAULT_PARAM_VALUE)
             param_data[f'{model_param}_fixed'] = [None] * n_sources
             param_data[f'{model_param}_bounds'] = [None] * n_sources
 
@@ -507,25 +507,26 @@ class PSFPhotometry(ModelImageMixin):
         Extract and store model parameters directly instead of storing
         the full model object.
 
+        This method updates the internal state container with model
+        parameter values, fixed flags, and bounds for a specific source.
+
         Parameters
         ----------
         row_index : int
             The index of the source in the results arrays.
 
         model : astropy.modeling.Model or None
-            The fitted model for this source, or None for invalid sources.
+            The fitted model for this source, or None for invalid
+            sources.
         """
         param_data = self._state['model_param_data']
-        flux_param = self._param_mapper.alias_to_model_param['flux']
 
         if model is None:
             # For invalid sources, use default template from psf_model
             template_model = self.psf_model
             for param_name in template_model.param_names:
-                if param_name == flux_param:
-                    param_data[param_name][row_index] = 0.0
-                else:
-                    param_data[param_name][row_index] = np.nan
+                # Set all parameters to np.nan for invalid sources
+                param_data[param_name][row_index] = self.DEFAULT_PARAM_VALUE
 
                 template_param = getattr(template_model, param_name)
                 param_data[f'{param_name}_fixed'][row_index] = (
@@ -570,27 +571,86 @@ class PSFPhotometry(ModelImageMixin):
         return make_repr(self, self._attrs)
 
     @staticmethod
+    def _validate_type(obj, name, expected_type):
+        """
+        Validate that object is of expected type.
+
+        Parameters
+        ----------
+        obj : object or None
+            Object to validate.
+
+        name : str
+            Name of the parameter for error messages.
+
+        expected_type : type or tuple of types
+            Expected type(s) for the object.
+
+        Returns
+        -------
+        obj : object or None
+            The validated object.
+
+        Raises
+        ------
+        error_type
+            If obj is not None and not an instance of expected_type.
+        """
+        if obj is not None and not isinstance(obj, expected_type):
+            type_name = expected_type.__name__
+            msg = f'{name} must be a {type_name} instance'
+            raise TypeError(msg)
+        return obj
+
+    @staticmethod
     def _validate_callable(obj, name):
         """
         Validate that the input object is callable.
+
+        Parameters
+        ----------
+        obj : object or None
+            Object to validate.
+
+        name : str
+            Name of the parameter for error messages.
+
+        Returns
+        -------
+        obj : object or None
+            The validated callable object.
+
+        Raises
+        ------
+        TypeError
+            If obj is not None and not callable.
         """
         if obj is not None and not callable(obj):
             msg = f'{name!r} must be a callable object'
             raise TypeError(msg)
         return obj
 
-    def _validate_grouper(self, grouper):
-        """
-        Validate the input ``grouper`` value.
-        """
-        if grouper is not None and not isinstance(grouper, SourceGrouper):
-            msg = 'grouper must be a SourceGrouper instance'
-            raise ValueError(msg)
-        return grouper
-
     def _validate_bounds(self, xy_bounds):
         """
         Validate the input ``xy_bounds`` value.
+
+        Parameters
+        ----------
+        xy_bounds : float, tuple of float, or None
+            The maximum distance(s) in pixels that fitted sources can be
+            from initial positions.
+
+        Returns
+        -------
+        xy_bounds : ndarray or None
+            The validated xy_bounds as a 2-element array, or None if
+            input was None.
+
+        Raises
+        ------
+        ValueError
+            If xy_bounds has incorrect shape, dimension, or contains
+            invalid values (non-positive or non-finite).
         """
         if xy_bounds is None:
             return xy_bounds
@@ -618,6 +678,22 @@ class PSFPhotometry(ModelImageMixin):
     def _validate_radius(radius):
         """
         Validate the input ``aperture_radius`` value.
+
+        Parameters
+        ----------
+        radius : float or None
+            The aperture radius value to validate.
+
+        Returns
+        -------
+        radius : float or None
+            The validated aperture radius.
+
+        Raises
+        ------
+        ValueError
+            If radius is not None and is not a strictly positive finite
+            scalar.
         """
         if radius is not None and (not np.isscalar(radius)
                                    or radius <= 0 or not np.isfinite(radius)):
@@ -628,15 +704,43 @@ class PSFPhotometry(ModelImageMixin):
     def _validate_localbkg(self, value, name):
         """
         Validate the input ``localbkg_estimator`` value.
+
+        Parameters
+        ----------
+        value : LocalBackground or None
+            The local background estimator to validate.
+
+        name : str
+            Name of the parameter for error messages.
+
+        Returns
+        -------
+        value : LocalBackground or None
+            The validated local background estimator.
+
+        Raises
+        ------
+        TypeError
+            If value is not None and not a LocalBackground instance.
         """
-        if value is not None and not isinstance(value, LocalBackground):
-            msg = 'localbkg_estimator must be a LocalBackground instance'
-            raise ValueError(msg)
+        value = self._validate_type(value, 'localbkg_estimator',
+                                    LocalBackground)
         return self._validate_callable(value, name)
 
     def _validate_maxiters(self, maxiters):
         """
         Validate the input ``maxiters`` value.
+
+        Parameters
+        ----------
+        maxiters : int or None
+            Maximum number of fitter iterations to validate.
+
+        Returns
+        -------
+        maxiters : int or None
+            The validated maxiters value, or None if the fitter doesn't
+            support this parameter.
         """
         spec = inspect.signature(self.fitter.__call__)
         if 'maxiter' not in spec.parameters:
@@ -649,6 +753,12 @@ class PSFPhotometry(ModelImageMixin):
     def _sync_data_unit(self):
         """
         Synchronize data_unit between main class and components.
+
+        This method ensures that the data_unit attribute is consistent
+        between the PSFPhotometry instance and its internal component
+        objects (e.g., _data_processor).
+
+        This method modifies the internal state in-place.
         """
         if hasattr(self, '_data_processor'):
             self._data_processor.data_unit = self.data_unit
@@ -1459,7 +1569,7 @@ class PSFPhotometry(ModelImageMixin):
             If `True`, the 'id' column will be reset to a sequential
             numbering starting from 1. If `False`, the 'id' column will
             be copied as is from `results_tbl`. This is useful only in
-            the the case where there are non-finite fitted values in the
+            the case where there are non-finite fitted values in the
             table, which would otherwise result in a non-sequential 'id'
             column.
 
@@ -1512,7 +1622,7 @@ class PSFPhotometry(ModelImageMixin):
             If `True`, the 'id' column will be reset to a sequential
             numbering starting from 1. If `False`, the 'id' column will
             be copied as is from `results_tbl`. This is useful only in
-            the the case where there are non-finite fitted values in the
+            the case where there are non-finite fitted values in the
             table, which would otherwise result in a non-sequential 'id'
             column.
 

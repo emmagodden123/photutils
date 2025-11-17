@@ -11,6 +11,7 @@ from astropy.modeling import CompoundModel
 from astropy.modeling.models import Const2D, Identity, Shift
 from astropy.nddata import NDData
 from astropy.units import Quantity
+from astropy.utils.decorators import deprecated
 from scipy.integrate import dblquad, trapezoid
 
 __all__ = ['grid_from_epsfs', 'make_psf_model']
@@ -322,6 +323,7 @@ def _shift_model_param(model, param_name, shift=2):
     return new_name
 
 
+@deprecated(since='3.0', alternative='`GriddedPSFModel`')
 def grid_from_epsfs(epsfs, grid_xypos=None, meta=None):
     """
     Create a GriddedPSFModel from a list of ImagePSF models.
@@ -339,7 +341,7 @@ def grid_from_epsfs(epsfs, grid_xypos=None, meta=None):
     'oversampling', or 'fill_value', they will be overridden.
 
     Note: If set on the input ImagePSF (x_0, y_0), then ``origin``
-    must be the same for each input EPSF. Additionally data units and
+    must be the same for each input EPSF. Additionally, data units and
     dimensions must be for each input EPSF, and values for ``flux`` and
     ``oversampling``, and ``fill_value`` must match as well.
 

@@ -610,7 +610,7 @@ def extract_stars(data, catalogs, *, size=(11, 11)):
     catalog(s).
 
     Stars where the cutout array bounds partially or completely lie
-    outside of the input ``data`` image will not be extracted.
+    outside the input ``data`` image will not be extracted.
 
     Parameters
     ----------
