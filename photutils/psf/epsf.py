@@ -38,7 +38,8 @@ class EPSFFitter:
     Parameters
     ----------
     fitter : `astropy.modeling.fitting.Fitter`, optional
-        A `~astropy.modeling.fitting.Fitter` object. If `None`, then the
+        A `~astropy.modeling.fitting.Fitter` object, or
+        `~photutils.psf.fitters.PriorLogTRFLSQFitter`. If `None`, then the
         default `~astropy.modeling.fitting.TRFLSQFitter` will be used.
 
     fit_boxsize : int, tuple of int, or `None`, optional
