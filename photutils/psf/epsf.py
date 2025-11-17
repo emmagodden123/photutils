@@ -375,7 +375,7 @@ class EPSFBuilder:
                  center_accuracy=1.0e-3,
                  sigma_clip=SIGMA_CLIP, 
                  epsf_class=ImagePSF, 
-                 gridpoint_estimation='polyfit_2nd', 
+                 gridpoint_estimation='polyfit', 
                  epsf_nonnegative=True, 
                  mask_background_pixels=True):
 
@@ -978,7 +978,7 @@ class EPSFBuilder:
         # add the residuals to the previous ePSF image
         new_epsf_data = epsf.data + residuals
 
-        if self.constrain_nonnegative:
+        if self.epsf_nonnegative:
             # Constrain the ePSF model to be non-negative
             new_epsf_data = np.clip(new_epsf_data, 0.0, None)
 
