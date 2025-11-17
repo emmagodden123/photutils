@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.optimize import least_squares
 
+__all__ = ['PriorLogTRFLSQFitter']
+
 class PriorLogTRFLSQFitter:
     """
     TRF-like fitter for photutils ImagePSF that fits log(flux) internally,
