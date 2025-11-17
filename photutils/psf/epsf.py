@@ -104,14 +104,13 @@ class EPSFFitter:
             msg = 'The input epsf must be an ImagePSF'
             raise TypeError(msg)
 
-        # make a copy of the input ePSF
-        epsf = epsf.deepcopy()
-
         # perform the fit
         fitted_stars = []
         for star in stars:
             if isinstance(star, EPSFStar):
-                fitted_star = self._fit_star(epsf, star, self.fitter,
+                # make a copy of the input ePSF since the fitter will modify it
+                _epsf = epsf.deepcopy()
+                fitted_star = self._fit_star(_epsf, star, self.fitter,
                                              self.fitter_kwargs,
                                              self.fitter_has_fit_info,
                                              self.fit_boxsize)
@@ -119,8 +118,10 @@ class EPSFFitter:
             elif isinstance(star, LinkedEPSFStar):
                 fitted_star = []
                 for linked_star in star:
+                    # make a copy of the input ePSF since the fitter will modify it
+                    _epsf = epsf.deepcopy()
                     fitted_star.append(
-                        self._fit_star(epsf, linked_star, self.fitter,
+                        self._fit_star(_epsf, linked_star, self.fitter,
                                        self.fitter_kwargs,
                                        self.fitter_has_fit_info,
                                        self.fit_boxsize))
