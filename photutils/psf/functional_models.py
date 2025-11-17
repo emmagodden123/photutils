@@ -1977,3 +1977,631 @@ class AiryDiskPSF(Fittable2DModel):
                 'y_0': inputs_unit[self.inputs[0]],
                 'radius': inputs_unit[self.inputs[0]],
                 'flux': outputs_unit[self.outputs[0]]}
+    
+class CircularGaussianFWG_PRF(Fittable2DModel):
+    r"""
+    Circular Gaussian model integrated over `flat with gaps' (FWG) pixels.
+
+    Because it is integrated, this model is considered a PRF, *not* a
+    PSF (see :ref:`psf-terminology` for more about the terminology used
+    here.)
+
+    This model is a Gaussian *integrated* over a pixel area. This is in contrast to the apparently similar
+    `astropy.modeling.functional_models.Gaussian2D`, which is the value
+    of a 2D Gaussian *at* the input coordinates, with no integration.
+    So this model is equivalent to assuming the PSF is Gaussian at a
+    *sub-pixel* level.
+
+    Parameters
+    ----------
+    flux : float, optional
+        Total integrated flux over the entire PSF.
+    pix_width: float, optional
+        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
+    x_0 : float, optional
+        Position of the peak in x direction.
+    y_0 : float, optional
+        Position of the peak in y direction.
+    a : float, optional
+        Amplitude of the Gaussian.
+    sigma : float, optional
+        Standard deviation of the Gaussian.
+
+    Notes
+    -----
+    This model is evaluated according to the following formula:
+
+        .. math::
+
+            f(x, y) =
+                \frac{F}{4}
+                \left[
+                {\rm erf} \left(\frac{x - x_0 + w}
+                {\sqrt{2} \sigma} \right) -
+                {\rm erf} \left(\frac{x - x_0 - w}
+                {\sqrt{2} \sigma} \right)
+                \right]
+                \left[
+                {\rm erf} \left(\frac{y - y_0 + w}
+                {\sqrt{2} \sigma} \right) -
+                {\rm erf} \left(\frac{y - y_0 - w}
+                {\sqrt{2} \sigma} \right)
+                \right]
+
+    where ``erf`` denotes the error function, ``F`` the total
+    integrated flux and ``w`` the half-width of a pixel.
+    """
+
+    flux = Parameter(default=1)
+    pix_width = Parameter(default=0.5)
+    x_0 = Parameter(default=0)
+    y_0 = Parameter(default=0)
+    sigma = Parameter(default=1, fixed=True)
+
+    _erf = None
+
+    @property
+    def bounding_box(self):
+        delta = 4 * self.sigma
+        return ((self.y_0 - delta, self.y_0 + delta),
+                (self.x_0 - delta, self.x_0 + delta))
+
+    def __init__(self, flux=flux.default, pix_width=pix_width.default,
+                 sigma=sigma.default, 
+                 x_0=x_0.default, y_0=y_0.default,
+                 **kwargs):
+        if self._erf is None:
+            from scipy.special import erf
+            self.__class__._erf = erf
+
+        super().__init__(n_models=1, flux=flux, pix_width=pix_width,
+                         sigma=sigma, x_0=x_0, y_0=y_0, **kwargs)
+        
+    def __call__(self, x, y, flux=None, pix_width=None, sigma=None, x_0=None, y_0=None):
+        """Evaluate the model at the given coordinates."""
+        if flux is None:
+            flux = self.flux
+        if pix_width is None:
+            pix_width = self.pix_width
+        if sigma is None:
+            sigma = self.sigma
+        if x_0 is None:
+            x_0 = self.x_0
+        if y_0 is None:
+            y_0 = self.y_0
+
+        return self.evaluate(x, y, flux, x_0, y_0, sigma, pix_width)
+
+
+    def evaluate(self, x, y, flux, x_0, y_0, sigma, pix_width, 
+                 normalised=False):
+        """Model function Gaussian PSF model."""
+        epsf = (1/4) * (
+            (self._erf((x - x_0 + pix_width) / (np.sqrt(2) * sigma)) 
+            - self._erf((x - x_0 - pix_width) / (np.sqrt(2) * sigma))) 
+            * (self._erf((y - y_0 + pix_width) / (np.sqrt(2) * sigma)) 
+            - self._erf((y - y_0 - pix_width) / (np.sqrt(2) * sigma)))
+            )        
+        
+        if normalised:
+            norm = self.get_normalisation()
+            return flux * epsf / norm
+        else:
+            return flux * epsf
+    
+    def get_normalisation(self):
+
+        # Calculate the normalisation region
+        norm_size = int(10*self.sigma)
+
+        # norm_size must be odd
+        if norm_size % 2 == 0:
+            norm_size += 1
+
+        # Generate the x and y coordinates for the normalisation region
+        x_img = np.linspace(
+                    -(norm_size-1) / 2, 
+                    (norm_size-1) / 2,
+                    norm_size)
+        xx, yy = np.meshgrid(x_img, x_img)
+        # print(xx, yy)
+        # Evaluate the model at the normalisation region
+        norm_img = self.evaluate(xx, yy, flux=1, pix_width=self.pix_width, sigma=self.sigma, x_0=0, y_0=0)
+        # Calculate the normalisation factor
+        norm = np.sum(norm_img)
+
+        # print(norm)
+
+        return norm
+
+
+class EllipticalGaussianFWG_PRF(Fittable2DModel):
+    r"""
+    Elliptical Gaussian model integrated over `flat with gaps' (FWG) pixels.
+
+    Because it is integrated, this model is considered a PRF, *not* a
+    PSF (see :ref:`psf-terminology` for more about the terminology used
+    here.)
+
+    This model is a Gaussian *integrated* over a pixel area. This is in contrast to the apparently similar
+    `astropy.modeling.functional_models.Gaussian2D`, which is the value
+    of a 2D Gaussian *at* the input coordinates, with no integration.
+    So this model is equivalent to assuming the PSF is Gaussian at a
+    *sub-pixel* level.
+
+    Parameters
+    ----------
+    flux : float, optional
+        Total integrated flux over the entire PSF.
+    pix_width: float, optional
+        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
+    x_0 : float, optional
+        Position of the peak in x direction.
+    y_0 : float, optional
+        Position of the peak in y direction.
+    a : float, optional
+        Amplitude of the Gaussian.
+    sigma_x : float, optional
+        Standard deviation of the Gaussian in the x-direction.
+    sigma_y : float, optional
+        Standard deviation of the Gaussian in the y-direction.
+
+    Notes
+    -----
+    This model is evaluated according to the following formula:
+
+        .. math::
+
+            f(x, y) =
+                \frac{F}{4}
+                \left[
+                {\rm erf} \left(\frac{x - x_0 + w}
+                {\sqrt{2} \sigma_x} \right) -
+                {\rm erf} \left(\frac{x - x_0 - w}
+                {\sqrt{2} \sigma_x} \right)
+                \right]
+                \left[
+                {\rm erf} \left(\frac{y - y_0 + w}
+                {\sqrt{2} \sigma_y} \right) -
+                {\rm erf} \left(\frac{y - y_0 - w}
+                {\sqrt{2} \sigma_y} \right)
+                \right]
+
+    where ``erf`` denotes the error function, ``F`` the total
+    integrated flux and ``w`` the half-width of a pixel.
+    """
+
+    flux = Parameter(default=1)
+    pix_width = Parameter(default=0.5)
+    x_0 = Parameter(default=0)
+    y_0 = Parameter(default=0)
+    sigma_x = Parameter(default=1, fixed=True)
+    sigma_y = Parameter(default=1, fixed=True)
+
+    _erf = None
+
+    @property
+    def bounding_box(self):
+        delta_x = 4 * self.sigma_x
+        delta_y = 4 * self.sigma_y
+        return ((self.y_0 - delta_x, self.y_0 + delta_y),
+                (self.x_0 - delta_x, self.x_0 + delta_y))
+
+    def __init__(self, flux=flux.default, pix_width=pix_width.default,
+                 sigma_x=sigma_x.default, sigma_y=sigma_y.default,
+                 x_0=x_0.default, y_0=y_0.default,
+                 **kwargs):
+        if self._erf is None:
+            from scipy.special import erf
+            self.__class__._erf = erf
+
+        super().__init__(n_models=1, flux=flux, pix_width=pix_width,
+                         sigma_x=sigma_x, sigma_y=sigma_y, x_0=x_0, y_0=y_0, **kwargs)
+
+
+    def evaluate(self, x, y, flux, x_0, y_0, sigma_x, sigma_y, pix_width):
+        """Model function Gaussian PSF model."""
+        g = (
+            (self._erf((x - x_0 + pix_width) / (np.sqrt(2) * sigma_x)) 
+            - self._erf((x - x_0 - pix_width) / (np.sqrt(2) * sigma_x))) 
+            * (self._erf((y - y_0 + pix_width) / (np.sqrt(2) * sigma_y)) 
+            - self._erf((y - y_0 - pix_width) / (np.sqrt(2) * sigma_y)))
+            )
+        return ((flux / 4) * g)
+    
+
+class MultiGaussianFWG_PRF(Fittable2DModel):
+    r"""
+    Multi component Gaussian model integrated over `flat with gaps' (FWG)
+    pixels.
+
+    Because it is integrated, this model is considered a PRF, *not* a
+    PSF (see :ref:`psf-terminology` for more about the terminology used
+    here.)
+
+    This model is set of Gaussians *integrated* over an area of
+    ``1`` (in units of the model input coordinates, e.g., 1
+    pixel). This is in contrast to the apparently similar
+    `astropy.modeling.functional_models.Gaussian2D`, which is the value
+    of a 2D Gaussian *at* the input coordinates, with no integration.
+    So this model is equivalent to assuming the PSF is Gaussian at a
+    *sub-pixel* level.
+
+    Parameters
+    ----------
+    flux : float, optional
+        Total integrated flux over the entire PSF.
+    x_0 : float, optional
+        Centre of the PSF.
+    y_0 : float, optional
+        Centre of the PSF.
+    pix_width: float, optional
+        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
+    params: 2D array of floats, optional
+        Parameters for the Gaussian components. Should be size N x 5 where N is the number of Gaussian components. Each row should contain the amplitude, sigma_x, sigma_y, and x, y centre of the Gaussian component.
+
+    Notes
+    -----
+    This model is evaluated according to the following formula:
+
+        .. math::
+
+            f(x, y) =
+                \frac{F}{4 * (a_1 + a_2 + a_3)}
+                \left( g_1 + g_2 + g_3 \right)
+
+    where ``F`` the total integrated flux, ``w`` the half-width of a pixel, ``a_i`` are the individual Gaussian component amplitudes, and ``g_i`` are the individual Gaussian components:
+
+        .. math::
+        g_i = a_i \left[
+          \left( {\rm erf} \left( \frac{x - (x_0 + x_i) + w}{\sqrt{2} \sigma_x_i} \right) - {\rm erf} \left( \frac{x - (x_0 + x_i) - w}{\sqrt{2} \sigma_x_i} \right) \right) \left( {\rm erf} \left( \frac{y - (y_0 + y_i) + w}{\sqrt{2} \sigma_y_i} \right) - {\rm erf} \left( \frac{y - (y_0 + y_i) - w}{\sqrt{2} \sigma_y_i} \right) \right) 
+          \right]
+    """
+
+    flux = Parameter(default=1)
+    x_0 = Parameter(default=0)
+    y_0 = Parameter(default=0)
+    pix_width = Parameter(default=0.5)
+    params = Parameter(default=[[1, 1, 1, 0, 0]])
+
+    _erf = None
+
+    @property
+    def bounding_box(self):
+        hw1_x = 4 * self.sigma_x_1
+        hw2_x = 4 * self.sigma_x_2
+        hw3_x = 4 * self.sigma_x_3
+        hw1_y = 4 * self.sigma_y_1
+        hw2_y = 4 * self.sigma_y_2
+        hw3_y = 4 * self.sigma_y_3
+        x_max = max(self.x_1 + hw1_x, self.x_2 + hw2_x, self.x_3 + hw3_x)
+        y_min = min(self.y_1 - hw1_y, self.y_2 - hw2_y, self.y_3 - hw3_y)
+        x_min = min(self.x_1 - hw1_x, self.x_2 - hw2_x, self.x_3 - hw3_x)
+        y_max = max(self.y_1 + hw1_y, self.y_2 + hw2_y, self.y_3 + hw3_y)
+        return ((int(y_min), int(y_max)),
+                (int(x_min), int(x_max)))
+
+    def __init__(self, flux=flux.default, x_0=x_0.default, y_0=y_0.default,
+                  pix_width=pix_width.default, params=params.default, **kwargs):
+        if self._erf is None:
+            from scipy.special import erf
+            self.__class__._erf = erf
+
+        super().__init__(n_models=1, flux=flux, x_0=x_0, y_0=y_0, 
+                         pix_width=pix_width, params=params, **kwargs)
+
+
+    def evaluate(self, x, y, flux, x_0, y_0, params, pix_width):
+        """Model function Gaussian PSF model."""
+        g = 0
+        a = 0
+        for i in range(len(params)):
+            a_i, sigma_x_i, sigma_y_i, x_i, y_i = params[i]
+            g_i = a_i * (
+                (self._erf((x - (x_0 + x_i) + pix_width) / (np.sqrt(2) * sigma_x_i)) 
+                - self._erf((x - (x_0 + x_i) - pix_width) / (np.sqrt(2) * sigma_x_i))) 
+                * (self._erf((y - (y_0 + y_i) + pix_width) / (np.sqrt(2) * sigma_y_i)) 
+                - self._erf((y - (y_0 + y_i) - pix_width) / (np.sqrt(2) * sigma_y_i)))
+                )
+            g += g_i
+            a += a_i
+            
+        return ((flux * g) / (4*a))
+
+
+class RotatedEllipticalGaussianFWG_PRF(Fittable2DModel):
+    r"""
+    Rotated elliptical Gaussian integrated over flat with gaps (FWG) pixels.
+
+    Parameters
+    ----------
+    flux : float
+        Total integrated flux.
+    pix_width : float
+        Half-width of a pixel (w).
+    x_0, y_0 : float
+        Centroid position.
+    sigma_1, sigma_2 : float
+        Standard deviations along the principal axes.
+    theta : float
+        Rotation angle (radians) of the principal axes relative to the x-axis.
+
+    Notes
+    -----
+    The pixel-integrated value for a pixel centred at (i,j) is obtained by
+    evaluating the bivariate normal CDF at the four pixel corners and using
+    inclusion-exclusion.
+    """
+
+    flux = Parameter(default=1.0)
+    pix_width = Parameter(default=0.5)
+    x_0 = Parameter(default=0.0)
+    y_0 = Parameter(default=0.0)
+    sigma_1 = Parameter(default=1.0, fixed=True)
+    sigma_2 = Parameter(default=1.0, fixed=True)
+    theta = Parameter(default=0.0, fixed=True)
+
+    # cached handles / simple normalisation cache
+    _mvn = None
+    _last_norm_params = None
+    _last_norm_value = None
+
+    @property
+    def bounding_box(self):
+        # conservative box: 4*sigma in the largest principal direction
+        delta = 4.0 * max(self.sigma_1, self.sigma_2)
+        return ((self.y_0 - delta, self.y_0 + delta),
+                (self.x_0 - delta, self.x_0 + delta))
+
+    def __init__(self, flux=flux.default, pix_width=pix_width.default,
+                 sigma_1=sigma_1.default, sigma_2=sigma_2.default,
+                 theta=theta.default, x_0=x_0.default, y_0=y_0.default,
+                 **kwargs):
+        # cache multivariate_normal if not already
+        if self._mvn is None:
+            from scipy.stats import multivariate_normal
+            self.__class__._mvn = multivariate_normal
+
+        super().__init__(n_models=1, flux=flux, pix_width=pix_width,
+                         sigma_1=sigma_1, sigma_2=sigma_2, theta=theta,
+                         x_0=x_0, y_0=y_0, **kwargs)
+
+    def _covariance_matrix(self, sigma_1, sigma_2, theta):
+        """Return the 2x2 covariance matrix with rotation theta."""
+        c, s = np.cos(theta), np.sin(theta)
+        R = np.array([[c, -s],
+                      [s,  c]])
+        D = np.diag([sigma_1**2, sigma_2**2])
+        return R @ D @ R.T
+
+    def evaluate(self, x, y, flux, x_0, y_0, sigma_1, sigma_2, theta,
+                 pix_width, normalised=False):
+        """
+        Compute pixel-integrated rotated elliptical Gaussian.
+        x, y may be scalars or ndarrays (same shapes).
+        If normalised=True, the model is scaled so the sum over integer
+        pixel centres in the normalisation region equals one.
+        """
+        # ensure arrays
+        x_arr = np.asanyarray(x)
+        y_arr = np.asanyarray(y)
+
+        cov = self._covariance_matrix(sigma_1, sigma_2, theta)
+        try:
+            mean = np.array([x_0.value, y_0.value])
+        except AttributeError:
+            mean = np.array([x_0, y_0])
+
+        # Prepare output array
+        out = np.zeros_like(x_arr, dtype=float)
+
+        # convenient alias for mvn cdf
+        mvn = self.__class__._mvn
+
+        # Flatten and compute per-point (vectorized per pixel)
+        flat_x = x_arr.ravel()
+        flat_y = y_arr.ravel()
+        for idx, (xc, yc) in enumerate(zip(flat_x, flat_y)):
+            a_x = xc - pix_width
+            b_x = xc + pix_width
+            a_y = yc - pix_width
+            b_y = yc + pix_width
+
+            # Evaluate bivariate CDF at four corners
+            F_b_b = mvn.cdf([b_x, b_y], mean=mean, cov=cov)
+            F_a_b = mvn.cdf([a_x, b_y], mean=mean, cov=cov)
+            F_b_a = mvn.cdf([b_x, a_y], mean=mean, cov=cov)
+            F_a_a = mvn.cdf([a_x, a_y], mean=mean, cov=cov)
+
+            epsf_val = (F_b_b - F_a_b - F_b_a + F_a_a)
+            out.ravel()[idx] = epsf_val
+
+        out = out.reshape(x_arr.shape)
+
+        if normalised:
+            norm = self.get_normalisation()
+            # protect against division by zero
+            if norm == 0:
+                return flux * out
+            return flux * out / norm
+        else:
+            return flux * out
+
+    def get_normalisation(self):
+        """
+        Compute the normalisation factor so that the sum of model
+        values at integer pixel centres over a region equals 1.
+
+        Region chosen: integer pixel centres within [x0 +- N, y0 +- N] where
+        N = ceil(4 * max(sigma_1, sigma_2)).
+        """
+
+        # choose integer pixel centres across a bounding region
+        delta = int(np.ceil(4.0 * max(self.sigma_1, self.sigma_2)))
+        ix = np.arange(int(np.floor(self.x_0) - delta), int(np.ceil(self.x_0) + delta) + 1)
+        iy = np.arange(int(np.floor(self.y_0) - delta), int(np.ceil(self.y_0) + delta) + 1)
+        # evaluate at integer centres (use normalised=False to get raw per-pixel fractions)
+        Xc, Yc = np.meshgrid(ix, iy)
+        vals = self.evaluate(Xc, Yc, flux=1.0, pix_width=self.pix_width,
+                             sigma_1=self.sigma_1, sigma_2=self.sigma_2,
+                             theta=self.theta, x_0=self.x_0, y_0=self.y_0, normalised=False)
+        norm = vals.sum()
+
+        return norm
+
+class SkewedGaussianFWG_PRF(Fittable2DModel):
+    r"""
+    Skewed Gaussian PRF (skew-normal in x multiplied by Gaussian in y),
+    integrated over `flat with gaps' (FWG) pixels. The model is:
+
+        Psi(x,y) = (1 / (2*pi*sigma_x*sigma_y)) * exp[-((x-x0)^2/(2 sigma_x^2) + (y-y0)^2/(2 sigma_y^2))]
+                   * Phi( eta * (x - x_skew0) / sigma_x )
+
+    where Phi(...) is the standard normal CDF. Because Phi depends only on x,
+    the pixel integral factorises into I_x(i) * I_y(j); I_y is analytic (erf)
+    and I_x is computed by 1-D quadrature (or special-function evaluation).
+    """
+
+    flux = Parameter(default=1.0)
+    pix_width = Parameter(default=0.5)
+    x_0 = Parameter(default=0.0)
+    y_0 = Parameter(default=0.0)
+    sigma_x = Parameter(default=1.0, fixed=True)
+    sigma_y = Parameter(default=1.0, fixed=True)
+    eta = Parameter(default=1.0)          # skew strength
+    x_skew0 = Parameter(default=0.0)      # transition position for Phi
+
+    # cached handles
+    _erf = None
+    _norm_cdf = None
+    _quad = None
+
+    # small cache for normalization
+    _last_norm_params = None
+    _last_norm_value = None
+
+    @property
+    def bounding_box(self):
+        delta_x = 4 * self.sigma_x
+        delta_y = 4 * self.sigma_y
+        return ((self.y_0 - delta_y, self.y_0 + delta_y),
+                (self.x_0 - delta_x, self.x_0 + delta_x))
+
+    def __init__(self, flux=flux.default, pix_width=pix_width.default,
+                 sigma_x=sigma_x.default, sigma_y=sigma_y.default,
+                 eta=eta.default, x_skew0=x_skew0.default,
+                 x_0=x_0.default, y_0=y_0.default, **kwargs):
+        if self._erf is None:
+            from scipy.special import erf
+            self.__class__._erf = erf
+        if self._norm_cdf is None:
+            # use scipy.stats.norm.cdf for Phi
+            from scipy.stats import norm
+            self.__class__._norm_cdf = norm.cdf
+        if self._quad is None:
+            from scipy.integrate import quad
+            self.__class__._quad = quad
+
+        super().__init__(n_models=1, flux=flux, pix_width=pix_width,
+                         sigma_x=sigma_x, sigma_y=sigma_y,
+                         eta=eta, x_skew0=x_skew0, x_0=x_0, y_0=y_0, **kwargs)
+
+    def _I_y(self, j, sigma_y, y_0, pix_width):
+        """Analytic y integral (error function) for pixel with centre j."""
+        a = (j - pix_width - y_0) / (np.sqrt(2) * sigma_y)
+        b = (j + pix_width - y_0) / (np.sqrt(2) * sigma_y)
+        return 0.5 * (self.__class__._erf(b) - self.__class__._erf(a))
+
+    def _I_x_numeric(self, i, sigma_x, x_0, pix_width, eta, x_skew0):
+        """Numerical 1-D integral for I_x over [i-w, i+w]."""
+        a = i - pix_width
+        b = i + pix_width
+
+        # integrand: phi_x(x) * Phi( eta * (x - x_skew0) / sigma_x )
+        def integrand(xx):
+            phi_x = np.exp(-0.5 * ((xx - x_0)/sigma_x)**2) / (np.sqrt(2*np.pi) * sigma_x)
+            return phi_x * self.__class__._norm_cdf(eta * (xx - (x_0 + x_skew0)) / sigma_x)
+
+        val, err = self.__class__._quad(integrand, a, b, epsabs=1e-10, epsrel=1e-10, limit=200)
+        return val
+
+    def evaluate(self, x, y, flux, x_0, y_0, sigma_x, sigma_y, eta, x_skew0,
+                 pix_width, normalised=False):
+        """
+        Compute the pixel-integrated skewed Gaussian PRF.
+        x, y may be scalars or ndarrays.
+        If normalised=True, the returned image is scaled so the sum over
+        integer pixel centres in the normalisation region equals one.
+        """
+        x_arr = np.asanyarray(x)
+        y_arr = np.asanyarray(y)
+
+        # For each (x,y) compute I_x(i)*I_y(j)
+        flat_x = x_arr.ravel()
+        flat_y = y_arr.ravel()
+        out = np.zeros_like(flat_x, dtype=float)
+
+        # Precompute Iy values for unique y pixel centres (speed)
+        unique_y = np.unique(flat_y)
+        Iy_map = {yj: self._I_y(yj, sigma_y, y_0, pix_width) for yj in unique_y}
+
+        # Compute Ix per unique x centre
+        unique_x = np.unique(flat_x)
+        Ix_map = {xi: self._I_x_numeric(xi, sigma_x, x_0, pix_width, eta, x_skew0) for xi in unique_x}
+
+        # Combine
+        for idx, (xc, yc) in enumerate(zip(flat_x, flat_y)):
+            Ix = Ix_map[xc]
+            Iy = Iy_map[yc]
+            out[idx] = Ix * Iy
+
+        out = out.reshape(x_arr.shape)
+
+        if normalised:
+            norm = self.get_normalisation()
+            if norm == 0:
+                return flux * out
+            return flux * out / norm
+        else:
+            return flux * out
+    
+    def normalisation_check(self):
+        """Check that normalisation works correctly."""
+         # choose integer pixel centres across a bounding region
+        delta = int(np.ceil(4.0 * max(self.sigma_x, self.sigma_y)))
+        ix = np.arange(int(np.floor(self.x_0) - delta), int(np.ceil(self.x_0) + delta) + 1)
+        iy = np.arange(int(np.floor(self.y_0) - delta), int(np.ceil(self.y_0) + delta) + 1)
+        Xc, Yc = np.meshgrid(ix, iy)
+
+        # Evaluate raw (un-normalised) model at integer centres
+        vals = self.evaluate(Xc, Yc, flux=1.0, pix_width=self.pix_width,
+                             sigma_x=self.sigma_x, sigma_y=self.sigma_y,
+                             eta=self.eta, x_skew0=self.x_skew0,
+                             x_0=self.x_0, y_0=self.y_0, normalised=True)
+        norm = vals.sum()
+        print(f"Normalisation check: sum over integer pixel centres = {norm}")
+
+    def get_normalisation(self):
+        """
+        Compute the normalisation factor so that the sum of model
+        values at integer pixel centres over a region equals 1.
+
+        Region chosen: integer pixel centres within [x0 +- N, y0 +- N] where
+        N = ceil(4 * max(sigma_x, sigma_y)).
+        """
+
+        # choose integer pixel centres across a bounding region
+        delta = int(np.ceil(4.0 * max(self.sigma_x, self.sigma_y)))
+        ix = np.arange(int(np.floor(self.x_0) - delta), int(np.ceil(self.x_0) + delta) + 1)
+        iy = np.arange(int(np.floor(self.y_0) - delta), int(np.ceil(self.y_0) + delta) + 1)
+        Xc, Yc = np.meshgrid(ix, iy)
+
+        # Evaluate raw (un-normalised) model at integer centres
+        vals = self.evaluate(Xc, Yc, flux=1.0, pix_width=self.pix_width,
+                             sigma_x=self.sigma_x, sigma_y=self.sigma_y,
+                             eta=self.eta, x_skew0=self.x_skew0,
+                             x_0=self.x_0, y_0=self.y_0, normalised=False)
+        norm = vals.sum()
+
+        return norm
+
