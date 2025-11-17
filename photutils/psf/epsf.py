@@ -1070,12 +1070,13 @@ class EPSFBuilder:
 
             iter_num += 1
 
-            if iter_num == 1 and self.residual_smoothing_kernel is not None:
-                # Do not use residual smoothing in the first iteration
+            if iter_num == 1 and self.residual_smoothing_kernel is not None and legacy_epsf is None:
+                # Do not use residual smoothing in the first iteration UNLESS 
+                # an initial ePSF is provided
                 residual_smoothing_backup = self.residual_smoothing
                 self.residual_smoothing = None
-            elif iter_num == 2 and self.residual_smoothing_kernel is not None:
-                # Restore residual smoothing after the first iteration
+            elif iter_num == 2 and self.residual_smoothing_kernel is not None and legacy_epsf is None:
+                # Restore residual smoothing after the first iteration if it was disabled
                 self.residual_smoothing = residual_smoothing_backup
 
             # build/improve the ePSF
