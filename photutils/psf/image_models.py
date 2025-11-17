@@ -11,6 +11,7 @@ from astropy.modeling import Fittable2DModel, Parameter
 from astropy.utils.decorators import deprecated, lazyproperty
 from astropy.utils.exceptions import AstropyUserWarning
 from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import RBFInterpolator
 
 from photutils.aperture import CircularAperture
 from photutils.utils._parameters import as_pair
@@ -356,6 +357,89 @@ class ImagePSF(Fittable2DModel):
             evaluated_model[invalid] = self.fill_value
 
         return evaluated_model
+    
+class RBFInterpolatorImagePSF(ImagePSF):
+    """
+    A subclass of ImagePSF that uses RBFInterpolator for interpolation.
+    """
+
+    def __init__(self, data, *, flux=1.0, x_0=0.0, y_0=0.0, origin=None,
+                 oversampling=1, fill_value=0.0, neighbours=None, smoothing=0.0, kernel='cubic', epsilon=None, degree=None, **kwargs):
+        """
+        Parameters:
+        ----------
+        data : 2D `numpy.ndarray`
+            The PSF image data. Should already be normalised.
+        flux, x_0, y_0, origin, oversampling, fill_value : various, optional
+            Same as in the parent class.
+        neighbours : int, optional
+            The number of neighboring points to use for the RBF interpolation.
+        smoothing : float, optional
+            Smoothing factor for the RBF interpolation.
+        kernel : str, optional
+            The radial basis function, e.g., 'linear', 'cubic', 'thin_plate_spline', etc. Default is 'cubic'.
+        epsilon : float, optional
+            Shape parameter for certain RBF kernels.
+        degree : int, optional
+            Degree of the polynomial term added to the RBF. Only used for
+            certain kernels.
+        """
+        self.neighbours = neighbours
+        self.smoothing = smoothing
+        self.kernel = kernel
+        self.epsilon = epsilon
+        self.degree = degree
+        super().__init__(data, flux=flux, x_0=x_0, y_0=y_0, origin=origin,
+                         oversampling=oversampling, fill_value=fill_value, **kwargs)
+
+    @property
+    def interpolator(self):
+        """
+        Override the interpolator to use RBFInterpolator.
+        """
+        y, x = np.indices(self.data.shape)
+        points_x = x.ravel()
+        points_y = y.ravel()
+        points = np.vstack((points_x, points_y)).T
+        values = self.data.ravel()
+
+        # Create the RBFInterpolator interpolator
+        return RBFInterpolator(points, values, neighbors=self.neighbours, smoothing=self.smoothing, kernel=self.kernel, epsilon=self.epsilon, degree=self.degree)
+    
+class RectBivariateSplineImagePSF(ImagePSF):
+    """
+    A subclass of ImagePSF that uses RectBivariateSpline with an input degree and smoothing parameter.
+    """
+
+    def __init__(self, data, *, flux=1.0, x_0=0.0, y_0=0.0, origin=None,
+                 oversampling=1, fill_value=0.0, smoothing=0, k=3, **kwargs):
+        """
+        Parameters:
+        ----------
+        data : 2D `numpy.ndarray`
+            The PSF image data.
+        flux, x_0, y_0, origin, oversampling, fill_value : various, optional
+            Same as in the parent class.
+        smoothing : float, optional
+            The smoothing parameter for the SmoothBivariateSpline.
+        k : int, optional
+            The degree of the spline. Default is 3.
+        """
+        self.smoothing = smoothing
+        self.k = k
+        super().__init__(data, flux=flux, x_0=x_0, y_0=y_0, origin=origin,
+                         oversampling=oversampling, fill_value=fill_value, **kwargs)
+
+    @property
+    def interpolator(self):
+        """
+        Override the interpolator to use RectBivariateSpline with input degree and smoothing parameter.
+        """
+        x = np.arange(self.data.shape[1])
+        y = np.arange(self.data.shape[0])
+        # RectBivariateSpline expects the data to be in (x, y) axis order
+        return RectBivariateSpline(x, y, self.data.T, kx=self.k, ky=self.k, s=self.smoothing)
+
 
 
 @deprecated('2.0.0', alternative='`ImagePSF`')
