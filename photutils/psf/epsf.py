@@ -384,6 +384,7 @@ class EPSFBuilder:
             raise ValueError(msg)
         self.oversampling = as_pair('oversampling', oversampling,
                                     lower_bound=(0, 1))
+        self.normalise_epsf = bool(normalise_epsf)
         self._norm_radius = norm_radius
         if shape is not None:
             self.shape = as_pair('shape', shape, lower_bound=(0, 1))
@@ -750,7 +751,7 @@ class EPSFBuilder:
         result : 2D `~numpy.ndarray`
             The recentered ePSF data.
         """
-        epsf_data = epsf._data
+        epsf_data = epsf.data
 
         epsf = self.epsf_class(data=epsf.data,
                                 oversampling=epsf.oversampling,
@@ -772,9 +773,9 @@ class EPSFBuilder:
 
             # Anderson & King (2000) recentering function depends
             # on specific pixels, and thus does not need a cutout
-            slices_large, _ = overlap_slices(epsf_data.shape, box_size,
-                                             (ycenter * self.oversampling[0],
-                                              xcenter * self.oversampling[1]))
+            slices_large, _ = overlap_slices(epsf_data.shape, 
+                                             box_size * self.oversampling,
+                                             (ycenter, xcenter))
             epsf_cutout = epsf_data[slices_large]
             mask = ~np.isfinite(epsf_cutout)
 
@@ -836,6 +837,8 @@ class EPSFBuilder:
         if box_size is None:
             box_size = epsf.data.shape / self.oversampling
         else:
+            # Convert box size to integer
+            box_size = np.asarray(box_size, dtype=int)
             box_size = as_pair('box_size', box_size,
                                lower_bound=(3, 3), check_odd=False)
             
@@ -995,7 +998,7 @@ class EPSFBuilder:
             maxiters=self.recentering_maxiters)
         
         # Make sure there are no negative values after recentering
-        if self.constrain_nonnegative:
+        if self.epsf_nonnegative:
             recentered_data = np.clip(recentered_data, 0.0, None)
 
         epsf = self.epsf_class(data=recentered_data,
