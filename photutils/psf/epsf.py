@@ -932,11 +932,11 @@ class EPSFBuilder:
                 # Fit a 2D quadratic polynomialsurface to the residuals for
                 # each gridsection.
                 # Assume residuals, x_coords, y_coords are already defined
-                N, M, M = residuals.shape  # Shape of the input 3D matrices
-                fitted_matrix = np.full((M, M), np.nan)  # Initialize with NaNs
+                N, My, Mx = residuals.shape  # Shape of the input 3D matrices
+                fitted_matrix = np.full((My, Mx), np.nan)  # Initialize with NaNs
 
-                for i in range(M):
-                    for j in range(M):
+                for i in range(My):
+                    for j in range(Mx):
                         # Extract valid samples across N slices
                         valid_mask = ~np.isnan(residuals[:, i, j])
                         x_samples = x_coords[valid_mask, i, j]
