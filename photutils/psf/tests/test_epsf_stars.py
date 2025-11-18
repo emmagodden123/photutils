@@ -9,9 +9,11 @@ import pytest
 from astropy.modeling.models import Moffat2D
 from astropy.nddata import NDData
 from astropy.table import Table
+from astropy.wcs import WCS
+from astropy.coordinates import SkyCoord
 from numpy.testing import assert_allclose
 
-from photutils.psf.epsf_stars import EPSFStar, EPSFStars, extract_stars
+from photutils.psf.epsf_stars import EPSFStar, EPSFStars, LinkedEPSFStar, extract_stars
 from photutils.psf.functional_models import CircularGaussianPRF
 from photutils.psf.image_models import ImagePSF
 
@@ -72,6 +74,83 @@ class TestExtractStars:
         with pytest.raises(ValueError, match=match):
             extract_stars([self.nddata, self.nddata], self.stars_tbl)
 
+class TestLinkedStars:
+    def setup_class(self):
+
+        self.wcs_map = WCS(naxis=2)
+        self.wcs_map.wcs.cdelt = np.array([1.0, 1.0])     
+        self.wcs_map.wcs.pc = np.eye(2)
+        self.wcs_map.wcs.crpix = np.array([0.0, 0.0])     
+        self.wcs_map.wcs.crval = np.array([0.0, 0.0])
+        self.wcs_map.wcs.ctype = ['RA---TAN', 'DEC--TAN']   
+        self.wcs_map.wcs.cunit = ['deg', 'deg']
+
+        stars_tbl = Table()
+        stars_tbl['x'] = [15, 15, 35, 35]
+        stars_tbl['y'] = [15, 35, 40, 10]
+        stars_tbl['id'] = [1, 2, 3, 4]
+        skycoords = []
+        for x, y in zip(stars_tbl['x'], stars_tbl['y'], strict=True):
+            ra, dec = self.wcs_map.wcs_pix2world(x, y, 0)
+            skycoords.append(SkyCoord(ra=ra, dec=dec, unit='deg'))
+        stars_tbl['skycoord'] = skycoords
+        self.stars_tbl = stars_tbl
+
+        yy, xx = np.mgrid[0:51, 0:55]
+        self.data = np.zeros(xx.shape)
+        for (xi, yi) in zip(stars_tbl['x'], stars_tbl['y'], strict=True):
+            m = Moffat2D(100, xi, yi, 3, 3)
+            self.data += m(xx, yy)
+
+        self.images = []
+        self.catalogs = []
+        for i in range(3):
+            self.images.append(NDData(data=self.data, wcs=self.wcs_map))
+            self.catalogs.append(self.stars_tbl)
+
+    def test_extract_stars(self):
+        size = 11
+        stars = extract_stars(self.images, self.catalogs, size=size)
+        assert len(stars) == 12
+        assert isinstance(stars, EPSFStars)
+
+    def test_link_stars(self):
+        stars = extract_stars(self.images, self.catalogs, size=11)
+        all_linked_stars = []
+        for id in self.stars_tbl['id']:
+            linked_stars_list = [star for star in stars if star.id_label == id]
+            linked_star = LinkedEPSFStar(linked_stars_list)
+            all_linked_stars.append(linked_star)
+        linked_stars = EPSFStars(all_linked_stars)
+        assert len(linked_stars) == 4
+        assert isinstance(linked_stars._data[0], LinkedEPSFStar)
+        assert len(linked_stars._data[0]) == 3
+
+    def test_constrain_fluxes(self):
+        stars = extract_stars(self.images, self.catalogs, size=11)
+        all_linked_stars = []
+        for id in self.stars_tbl['id']:
+            linked_stars_list = [star for star in stars if star.id_label == id]
+            linked_star = LinkedEPSFStar(linked_stars_list)
+            all_linked_stars.append(linked_star)
+        linked_stars = EPSFStars(all_linked_stars)
+        for linked_star in linked_stars._data:
+            linked_star.constrain_fluxes()
+            fluxes = [star.flux for star in linked_star]
+            assert np.all(fluxes == fluxes[0])
+
+    def test_constrain_centers(self):
+        stars = extract_stars(self.images, self.catalogs, size=11)
+        all_linked_stars = []
+        for id in self.stars_tbl['id']:
+            linked_stars_list = [star for star in stars if star.id_label == id]
+            linked_star = LinkedEPSFStar(linked_stars_list)
+            all_linked_stars.append(linked_star)
+        linked_stars = EPSFStars(all_linked_stars)
+        for linked_star in linked_stars._data:
+            linked_star.constrain_centers()
+            centers = [star.center for star in linked_star]
+            assert np.all(centers == centers[0])
 
 def test_epsf_star_residual_image():
     """
