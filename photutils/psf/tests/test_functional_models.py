@@ -12,7 +12,11 @@ from numpy.testing import assert_allclose
 
 from photutils.psf import (AiryDiskPSF, CircularGaussianPRF,
                            CircularGaussianPSF, CircularGaussianSigmaPRF,
-                           GaussianPRF, GaussianPSF, MoffatPSF)
+                           GaussianPRF, GaussianPSF, MoffatPSF, 
+                           CircularGaussianFWG_PRF, EllipticalGaussianFWG_PRF, 
+                           MultiGaussianFWG_PRF, 
+                           RotatedEllipticalGaussianFWG_PRF, 
+                           SkewedGaussianFWG_PRF)
 
 
 def make_gaussian_models(name):
@@ -249,3 +253,61 @@ def test_airydisk_psf_model(use_units):
     model = AiryDiskPSF(x_0=0, y_0=0, radius=5)
     bbox = 42.18329801081182
     assert_allclose(model.bounding_box, ((-bbox, bbox), (-bbox, bbox)))
+
+def test_circular_gaussian_fwg_prf():
+    model = CircularGaussianFWG_PRF(flux=1, sigma=3, x_0=0, y_0=0,
+                                    pix_width=0.4)
+    # Create a grid of pixel centers within the bounding box (4*sigma)
+    yy, xx = np.mgrid[-12:13, -12:13]
+    data = model(xx, yy, normalised=True)
+    # Check normalisation
+    assert_allclose(data.sum(), 1.0, rtol=1e-5)
+    # Check that the peak value is at the center
+    assert data[12, 12] == np.max(data)
+
+def test_elliptical_gaussian_fwg_prf():
+    model = EllipticalGaussianFWG_PRF(flux=1, sigma_x=3, sigma_y=2,
+                                      x_0=0, y_0=0, pix_width=0.4)
+    # Create a grid of pixel centers within the bounding box (4*sigma)
+    yy, xx = np.mgrid[-8:9, -12:13]
+    data = model(xx, yy, normalised=True)
+    # Check normalisation
+    assert_allclose(data.sum(), 1.0, rtol=1e-5)
+    # Check that the peak value is at the center
+    assert data[8, 12] == np.max(data)
+
+def test_multi_gaussian_fwg_prf():
+    model = MultiGaussianFWG_PRF(flux=1,
+                                 x_0=0, y_0=0,
+                                 pix_width=0.4,
+                                 params=[(1, 2, 2, 0, 0),
+                                         (0.5, 3, 2, 0, 0)])
+    # Create a grid of pixel centers within the bounding box (4*max(sigmas))
+    # max sigma_x = 3, max sigma_y = 2
+    yy, xx = np.mgrid[-8:9, -12:13]
+    data = model(xx, yy, normalised=True)
+    # Check normalisation
+    assert_allclose(data.sum(), 1.0, rtol=1e-5)
+    # Check that the peak value is at the center (since both Gaussians centered at 0,0)
+    assert data[8, 12] == np.max(data)
+
+def test_rotated_elliptical_gaussian_fwg_prf():
+    model = RotatedEllipticalGaussianFWG_PRF(flux=1, sigma_1=3, sigma_2=2,
+                                            theta=np.pi/4,
+                                            x_0=0, y_0=0, pix_width=0.4)
+    # Create a grid of pixel centers within the bounding box (4*max(sigma_1, sigma_2))
+    yy, xx = np.mgrid[-12:13, -12:13]
+    data = model(xx, yy, normalised=True)
+    # Check normalisation
+    assert_allclose(data.sum(), 1.0, rtol=1e-4)
+    # Check that the peak value is at the center
+    assert data[12, 12] == np.max(data)
+
+def test_skewed_gaussian_fwg_prf():
+    model = SkewedGaussianFWG_PRF(flux=1, sigma_x=3, sigma_y=2, eta=5,
+                                  x_skew0=0, x_0=0, y_0=0, pix_width=0.4)
+    # Create a grid of pixel centers within the bounding box (4*sigma)
+    yy, xx = np.mgrid[-8:9, -12:13]
+    data = model(xx, yy, normalised=True)
+    # Check normalisation
+    assert_allclose(data.sum(), 1.0, rtol=1e-5)

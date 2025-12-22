@@ -18,6 +18,11 @@ __all__ = [
     'GaussianPRF',
     'GaussianPSF',
     'MoffatPSF',
+    'CircularGaussianFWG_PRF',
+    'EllipticalGaussianFWG_PRF',
+    'MultiGaussianFWG_PRF',
+    'RotatedEllipticalGaussianFWG_PRF',
+    'SkewedGaussianFWG_PRF',
 ]
 
 FLOAT_EPSILON = float(np.finfo(np.float32).tiny)
@@ -1996,16 +2001,14 @@ class CircularGaussianFWG_PRF(Fittable2DModel):
     ----------
     flux : float, optional
         Total integrated flux over the entire PSF.
-    pix_width: float, optional
-        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
     x_0 : float, optional
         Position of the peak in x direction.
     y_0 : float, optional
         Position of the peak in y direction.
-    a : float, optional
-        Amplitude of the Gaussian.
     sigma : float, optional
         Standard deviation of the Gaussian.
+    pix_width: float, optional
+        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
 
     Notes
     -----
@@ -2033,10 +2036,10 @@ class CircularGaussianFWG_PRF(Fittable2DModel):
     """
 
     flux = Parameter(default=1)
-    pix_width = Parameter(default=0.5)
     x_0 = Parameter(default=0)
     y_0 = Parameter(default=0)
     sigma = Parameter(default=1, fixed=True)
+    pix_width = Parameter(default=0.5)
 
     _erf = None
 
@@ -2046,35 +2049,37 @@ class CircularGaussianFWG_PRF(Fittable2DModel):
         return ((self.y_0 - delta, self.y_0 + delta),
                 (self.x_0 - delta, self.x_0 + delta))
 
-    def __init__(self, flux=flux.default, pix_width=pix_width.default,
-                 sigma=sigma.default, 
-                 x_0=x_0.default, y_0=y_0.default,
-                 **kwargs):
+    def __init__(self, flux=flux.default, sigma=sigma.default, x_0=x_0.default, 
+                 y_0=y_0.default, pix_width=pix_width.default, **kwargs):
         if self._erf is None:
             from scipy.special import erf
             self.__class__._erf = erf
 
-        super().__init__(n_models=1, flux=flux, pix_width=pix_width,
-                         sigma=sigma, x_0=x_0, y_0=y_0, **kwargs)
+        super().__init__(n_models=1, flux=flux, sigma=sigma, x_0=x_0, y_0=y_0, 
+                         pix_width=pix_width, **kwargs)
         
-    def __call__(self, x, y, flux=None, pix_width=None, sigma=None, x_0=None, y_0=None):
+    def __call__(self, x, y, flux=None, x_0=None, y_0=None, sigma=None, 
+                 pix_width=None, normalised=None):
         """Evaluate the model at the given coordinates."""
         if flux is None:
             flux = self.flux
-        if pix_width is None:
-            pix_width = self.pix_width
-        if sigma is None:
-            sigma = self.sigma
         if x_0 is None:
             x_0 = self.x_0
         if y_0 is None:
             y_0 = self.y_0
+        if sigma is None:
+            sigma = self.sigma
+        if pix_width is None:
+            pix_width = self.pix_width
+        if normalised is None:
+            normalised = True
 
-        return self.evaluate(x, y, flux, x_0, y_0, sigma, pix_width)
+        return self.evaluate(x, y, flux, x_0, y_0, sigma, pix_width, 
+                             normalised=normalised)
 
 
     def evaluate(self, x, y, flux, x_0, y_0, sigma, pix_width, 
-                 normalised=False):
+                 normalised=True):
         """Model function Gaussian PSF model."""
         epsf = (1/4) * (
             (self._erf((x - x_0 + pix_width) / (np.sqrt(2) * sigma)) 
@@ -2091,26 +2096,20 @@ class CircularGaussianFWG_PRF(Fittable2DModel):
     
     def get_normalisation(self):
 
-        # Calculate the normalisation region
-        norm_size = int(10*self.sigma)
+        # Get the bounding box limits
+        bbox = self.bounding_box
+        x_min = int(np.floor(bbox[0][0]))
+        x_max = int(np.ceil(bbox[0][1]))
+        y_min = int(np.floor(bbox[1][0]))
+        y_max = int(np.ceil(bbox[1][1]))
 
-        # norm_size must be odd
-        if norm_size % 2 == 0:
-            norm_size += 1
+        # Create a grid of pixel centers within the bounding box
+        yy, xx = np.mgrid[y_min:y_max+1, x_min:x_max+1]
 
-        # Generate the x and y coordinates for the normalisation region
-        x_img = np.linspace(
-                    -(norm_size-1) / 2, 
-                    (norm_size-1) / 2,
-                    norm_size)
-        xx, yy = np.meshgrid(x_img, x_img)
-        # print(xx, yy)
         # Evaluate the model at the normalisation region
-        norm_img = self.evaluate(xx, yy, flux=1, pix_width=self.pix_width, sigma=self.sigma, x_0=0, y_0=0)
+        norm_img = self.evaluate(xx, yy, flux=1, pix_width=self.pix_width, sigma=self.sigma, x_0=0, y_0=0, normalised=False)
         # Calculate the normalisation factor
         norm = np.sum(norm_img)
-
-        # print(norm)
 
         return norm
 
@@ -2133,18 +2132,16 @@ class EllipticalGaussianFWG_PRF(Fittable2DModel):
     ----------
     flux : float, optional
         Total integrated flux over the entire PSF.
-    pix_width: float, optional
-        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
     x_0 : float, optional
         Position of the peak in x direction.
     y_0 : float, optional
         Position of the peak in y direction.
-    a : float, optional
-        Amplitude of the Gaussian.
     sigma_x : float, optional
         Standard deviation of the Gaussian in the x-direction.
     sigma_y : float, optional
         Standard deviation of the Gaussian in the y-direction.
+    pix_width: float, optional
+        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
 
     Notes
     -----
@@ -2172,11 +2169,11 @@ class EllipticalGaussianFWG_PRF(Fittable2DModel):
     """
 
     flux = Parameter(default=1)
-    pix_width = Parameter(default=0.5)
     x_0 = Parameter(default=0)
     y_0 = Parameter(default=0)
     sigma_x = Parameter(default=1, fixed=True)
     sigma_y = Parameter(default=1, fixed=True)
+    pix_width = Parameter(default=0.5)
 
     _erf = None
 
@@ -2184,30 +2181,74 @@ class EllipticalGaussianFWG_PRF(Fittable2DModel):
     def bounding_box(self):
         delta_x = 4 * self.sigma_x
         delta_y = 4 * self.sigma_y
-        return ((self.y_0 - delta_x, self.y_0 + delta_y),
-                (self.x_0 - delta_x, self.x_0 + delta_y))
+        return ((self.y_0 - delta_y, self.y_0 + delta_y),
+                (self.x_0 - delta_x, self.x_0 + delta_x))
 
-    def __init__(self, flux=flux.default, pix_width=pix_width.default,
+    def __init__(self, flux=flux.default, x_0=x_0.default, y_0=y_0.default,
                  sigma_x=sigma_x.default, sigma_y=sigma_y.default,
-                 x_0=x_0.default, y_0=y_0.default,
-                 **kwargs):
+                 pix_width=pix_width.default, **kwargs):
         if self._erf is None:
             from scipy.special import erf
             self.__class__._erf = erf
 
-        super().__init__(n_models=1, flux=flux, pix_width=pix_width,
-                         sigma_x=sigma_x, sigma_y=sigma_y, x_0=x_0, y_0=y_0, **kwargs)
+        super().__init__(n_models=1, flux=flux, x_0=x_0, y_0=y_0,
+                         sigma_x=sigma_x, sigma_y=sigma_y,
+                         pix_width=pix_width, **kwargs)
 
+    def __call__(self, x, y, flux=None, x_0=None, y_0=None, sigma_x=None,
+                 sigma_y=None, pix_width=None, normalised=None):
+        """Evaluate the model at the given coordinates."""
+        if flux is None:
+            flux = self.flux
+        if x_0 is None:
+            x_0 = self.x_0
+        if y_0 is None:
+            y_0 = self.y_0
+        if sigma_x is None:
+            sigma_x = self.sigma_x
+        if sigma_y is None:
+            sigma_y = self.sigma_y
+        if pix_width is None:
+            pix_width = self.pix_width
+        if normalised is None:
+            normalised = True
 
-    def evaluate(self, x, y, flux, x_0, y_0, sigma_x, sigma_y, pix_width):
+        return self.evaluate(x, y, flux, x_0, y_0, sigma_x, sigma_y, pix_width,
+                             normalised=normalised)
+
+    def evaluate(self, x, y, flux, x_0, y_0, sigma_x, sigma_y, pix_width, 
+                 normalised=True):
         """Model function Gaussian PSF model."""
-        g = (
+        epsf = 1/4 * (
             (self._erf((x - x_0 + pix_width) / (np.sqrt(2) * sigma_x)) 
             - self._erf((x - x_0 - pix_width) / (np.sqrt(2) * sigma_x))) 
             * (self._erf((y - y_0 + pix_width) / (np.sqrt(2) * sigma_y)) 
             - self._erf((y - y_0 - pix_width) / (np.sqrt(2) * sigma_y)))
             )
-        return ((flux / 4) * g)
+        if normalised:
+            norm = self.get_normalisation()
+            return flux * epsf / norm
+        else:
+            return flux * epsf
+
+    def get_normalisation(self):
+
+        # Get the bounding box limits
+        bbox = self.bounding_box
+        x_min = int(np.floor(bbox[0][0]))
+        x_max = int(np.ceil(bbox[0][1]))
+        y_min = int(np.floor(bbox[1][0]))
+        y_max = int(np.ceil(bbox[1][1]))
+
+        # Create a grid of pixel centers within the bounding box
+        yy, xx = np.mgrid[y_min:y_max+1, x_min:x_max+1]
+
+        # Evaluate the model at the normalisation region
+        norm_img = self.evaluate(xx, yy, flux=1, pix_width=self.pix_width, sigma_x=self.sigma_x, sigma_y=self.sigma_y, x_0=0, y_0=0, normalised=False)
+        # Calculate the normalisation factor
+        norm = np.sum(norm_img)
+
+        return norm
     
 
 class MultiGaussianFWG_PRF(Fittable2DModel):
@@ -2235,11 +2276,11 @@ class MultiGaussianFWG_PRF(Fittable2DModel):
         Centre of the PSF.
     y_0 : float, optional
         Centre of the PSF.
-    pix_width: float, optional
-        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
     params: 2D array of floats, optional
         Parameters for the Gaussian components. Should be size N x 5 where N is the number of Gaussian components. Each row should contain the amplitude, sigma_x, sigma_y, and x, y centre of the Gaussian component.
-
+    pix_width: float, optional
+        Half-width of a pixel in the same units as the model input coordinates. Must be 0 < pix_width <= 0.5.
+        
     Notes
     -----
     This model is evaluated according to the following formula:
@@ -2261,25 +2302,27 @@ class MultiGaussianFWG_PRF(Fittable2DModel):
     flux = Parameter(default=1)
     x_0 = Parameter(default=0)
     y_0 = Parameter(default=0)
-    pix_width = Parameter(default=0.5)
     params = Parameter(default=[[1, 1, 1, 0, 0]])
+    pix_width = Parameter(default=0.5)
 
     _erf = None
 
     @property
     def bounding_box(self):
-        hw1_x = 4 * self.sigma_x_1
-        hw2_x = 4 * self.sigma_x_2
-        hw3_x = 4 * self.sigma_x_3
-        hw1_y = 4 * self.sigma_y_1
-        hw2_y = 4 * self.sigma_y_2
-        hw3_y = 4 * self.sigma_y_3
-        x_max = max(self.x_1 + hw1_x, self.x_2 + hw2_x, self.x_3 + hw3_x)
-        y_min = min(self.y_1 - hw1_y, self.y_2 - hw2_y, self.y_3 - hw3_y)
-        x_min = min(self.x_1 - hw1_x, self.x_2 - hw2_x, self.x_3 - hw3_x)
-        y_max = max(self.y_1 + hw1_y, self.y_2 + hw2_y, self.y_3 + hw3_y)
-        return ((int(y_min), int(y_max)),
-                (int(x_min), int(x_max)))
+        # Determine the maximum sigma to set bounding box
+        max_sigma_x = 0
+        max_sigma_y = 0
+        for i in range(len(self.params)):
+            a_i, sigma_x_i, sigma_y_i, x_i, y_i = self.params[i]
+            if sigma_x_i > max_sigma_x:
+                max_sigma_x = sigma_x_i
+            if sigma_y_i > max_sigma_y:
+                max_sigma_y = sigma_y_i
+
+        delta_x = 4 * max_sigma_x
+        delta_y = 4 * max_sigma_y
+        return ((self.y_0 - delta_y, self.y_0 + delta_y),
+                (self.x_0 - delta_x, self.x_0 + delta_x))
 
     def __init__(self, flux=flux.default, x_0=x_0.default, y_0=y_0.default,
                   pix_width=pix_width.default, params=params.default, **kwargs):
@@ -2290,8 +2333,26 @@ class MultiGaussianFWG_PRF(Fittable2DModel):
         super().__init__(n_models=1, flux=flux, x_0=x_0, y_0=y_0, 
                          pix_width=pix_width, params=params, **kwargs)
 
+    def __call__(self, x, y, flux=None, x_0=None, y_0=None, pix_width=None, params=None, normalised=None):
+        """Evaluate the model at the given coordinates."""
+        if flux is None:
+            flux = self.flux
+        if x_0 is None:
+            x_0 = self.x_0
+        if y_0 is None:
+            y_0 = self.y_0
+        if pix_width is None:
+            pix_width = self.pix_width
+        if params is None:
+            params = self.params
+        if normalised is None:
+            normalised = True
 
-    def evaluate(self, x, y, flux, x_0, y_0, params, pix_width):
+        return self.evaluate(x, y, flux, x_0, y_0, params, pix_width, 
+                             normalised=normalised)
+
+    def evaluate(self, x, y, flux, x_0, y_0, params, pix_width, 
+                 normalised=True):
         """Model function Gaussian PSF model."""
         g = 0
         a = 0
@@ -2305,8 +2366,33 @@ class MultiGaussianFWG_PRF(Fittable2DModel):
                 )
             g += g_i
             a += a_i
+        
+        epsf = g / (4*a)
             
-        return ((flux * g) / (4*a))
+        if normalised:
+            norm = self.get_normalisation()
+            return flux * epsf / norm
+        else:
+            return flux * epsf
+        
+    def get_normalisation(self):
+        
+        # Get the bounding box limits
+        bbox = self.bounding_box
+        x_min = int(np.floor(bbox[0][0]))
+        x_max = int(np.ceil(bbox[0][1]))
+        y_min = int(np.floor(bbox[1][0]))
+        y_max = int(np.ceil(bbox[1][1]))
+
+        # Create a grid of pixel centers within the bounding box
+        yy, xx = np.mgrid[y_min:y_max+1, x_min:x_max+1]
+
+        # Evaluate the model at the normalisation region
+        norm_img = self.evaluate(xx, yy, flux=1, pix_width=self.pix_width, params=self.params, x_0=0, y_0=0, normalised=False)
+        # Calculate the normalisation factor
+        norm = np.sum(norm_img)
+
+        return norm
 
 
 class RotatedEllipticalGaussianFWG_PRF(Fittable2DModel):
@@ -2365,6 +2451,29 @@ class RotatedEllipticalGaussianFWG_PRF(Fittable2DModel):
         super().__init__(n_models=1, flux=flux, pix_width=pix_width,
                          sigma_1=sigma_1, sigma_2=sigma_2, theta=theta,
                          x_0=x_0, y_0=y_0, **kwargs)
+        
+    def __call__(self, x, y, flux=None, x_0=None, y_0=None, sigma_1=None,
+                 sigma_2=None, theta=None, pix_width=None, normalised=None):
+        """Evaluate the model at the given coordinates."""
+        if flux is None:
+            flux = self.flux
+        if x_0 is None:
+            x_0 = self.x_0
+        if y_0 is None:
+            y_0 = self.y_0
+        if sigma_1 is None:
+            sigma_1 = self.sigma_1
+        if sigma_2 is None:
+            sigma_2 = self.sigma_2
+        if theta is None:
+            theta = self.theta
+        if pix_width is None:
+            pix_width = self.pix_width
+        if normalised is None:
+            normalised = True
+
+        return self.evaluate(x, y, flux, x_0, y_0, sigma_1, sigma_2, theta,
+                             pix_width, normalised=normalised)
 
     def _covariance_matrix(self, sigma_1, sigma_2, theta):
         """Return the 2x2 covariance matrix with rotation theta."""
@@ -2433,19 +2542,23 @@ class RotatedEllipticalGaussianFWG_PRF(Fittable2DModel):
         values at integer pixel centres over a region equals 1.
 
         Region chosen: integer pixel centres within [x0 +- N, y0 +- N] where
-        N = ceil(4 * max(sigma_1, sigma_2)).
+        N depends on the bounding box.
         """
 
-        # choose integer pixel centres across a bounding region
-        delta = int(np.ceil(4.0 * max(self.sigma_1, self.sigma_2)))
-        ix = np.arange(int(np.floor(self.x_0) - delta), int(np.ceil(self.x_0) + delta) + 1)
-        iy = np.arange(int(np.floor(self.y_0) - delta), int(np.ceil(self.y_0) + delta) + 1)
-        # evaluate at integer centres (use normalised=False to get raw per-pixel fractions)
-        Xc, Yc = np.meshgrid(ix, iy)
-        vals = self.evaluate(Xc, Yc, flux=1.0, pix_width=self.pix_width,
+        # Get the bounding box limits
+        bbox = self.bounding_box
+        x_min = int(np.floor(bbox[0][0]))
+        x_max = int(np.ceil(bbox[0][1]))
+        y_min = int(np.floor(bbox[1][0]))
+        y_max = int(np.ceil(bbox[1][1]))
+
+        # Create a grid of pixel centers within the bounding box
+        yy, xx = np.mgrid[y_min:y_max+1, x_min:x_max+1]
+
+        norm_img = self.evaluate(xx, yy, flux=1.0, pix_width=self.pix_width,
                              sigma_1=self.sigma_1, sigma_2=self.sigma_2,
                              theta=self.theta, x_0=self.x_0, y_0=self.y_0, normalised=False)
-        norm = vals.sum()
+        norm = norm_img.sum()
 
         return norm
 
@@ -2506,6 +2619,32 @@ class SkewedGaussianFWG_PRF(Fittable2DModel):
                          sigma_x=sigma_x, sigma_y=sigma_y,
                          eta=eta, x_skew0=x_skew0, x_0=x_0, y_0=y_0, **kwargs)
 
+    def __call__(self, x, y, flux=None, x_0=None, y_0=None, sigma_x=None,
+                 sigma_y=None, eta=None, x_skew0=None, pix_width=None,
+                 normalised=None):
+        """Evaluate the model at the given coordinates."""
+        if flux is None:
+            flux = self.flux
+        if x_0 is None:
+            x_0 = self.x_0
+        if y_0 is None:
+            y_0 = self.y_0
+        if sigma_x is None:
+            sigma_x = self.sigma_x
+        if sigma_y is None:
+            sigma_y = self.sigma_y
+        if eta is None:
+            eta = self.eta
+        if x_skew0 is None:
+            x_skew0 = self.x_skew0
+        if pix_width is None:
+            pix_width = self.pix_width
+        if normalised is None:
+            normalised = True
+
+        return self.evaluate(x, y, flux, x_0, y_0, sigma_x, sigma_y, eta,
+                             x_skew0, pix_width, normalised=normalised)
+
     def _I_y(self, j, sigma_y, y_0, pix_width):
         """Analytic y integral (error function) for pixel with centre j."""
         a = (j - pix_width - y_0) / (np.sqrt(2) * sigma_y)
@@ -2564,22 +2703,6 @@ class SkewedGaussianFWG_PRF(Fittable2DModel):
             return flux * out / norm
         else:
             return flux * out
-    
-    def normalisation_check(self):
-        """Check that normalisation works correctly."""
-         # choose integer pixel centres across a bounding region
-        delta = int(np.ceil(4.0 * max(self.sigma_x, self.sigma_y)))
-        ix = np.arange(int(np.floor(self.x_0) - delta), int(np.ceil(self.x_0) + delta) + 1)
-        iy = np.arange(int(np.floor(self.y_0) - delta), int(np.ceil(self.y_0) + delta) + 1)
-        Xc, Yc = np.meshgrid(ix, iy)
-
-        # Evaluate raw (un-normalised) model at integer centres
-        vals = self.evaluate(Xc, Yc, flux=1.0, pix_width=self.pix_width,
-                             sigma_x=self.sigma_x, sigma_y=self.sigma_y,
-                             eta=self.eta, x_skew0=self.x_skew0,
-                             x_0=self.x_0, y_0=self.y_0, normalised=True)
-        norm = vals.sum()
-        print(f"Normalisation check: sum over integer pixel centres = {norm}")
 
     def get_normalisation(self):
         """
@@ -2590,18 +2713,22 @@ class SkewedGaussianFWG_PRF(Fittable2DModel):
         N = ceil(4 * max(sigma_x, sigma_y)).
         """
 
-        # choose integer pixel centres across a bounding region
-        delta = int(np.ceil(4.0 * max(self.sigma_x, self.sigma_y)))
-        ix = np.arange(int(np.floor(self.x_0) - delta), int(np.ceil(self.x_0) + delta) + 1)
-        iy = np.arange(int(np.floor(self.y_0) - delta), int(np.ceil(self.y_0) + delta) + 1)
-        Xc, Yc = np.meshgrid(ix, iy)
+        # Get the bounding box limits
+        bbox = self.bounding_box
+        x_min = int(np.floor(bbox[0][0]))
+        x_max = int(np.ceil(bbox[0][1]))
+        y_min = int(np.floor(bbox[1][0]))
+        y_max = int(np.ceil(bbox[1][1]))
+
+        # Create a grid of pixel centers within the bounding box
+        yy, xx = np.mgrid[y_min:y_max+1, x_min:x_max+1]
 
         # Evaluate raw (un-normalised) model at integer centres
-        vals = self.evaluate(Xc, Yc, flux=1.0, pix_width=self.pix_width,
+        norm_img = self.evaluate(xx, yy, flux=1.0, pix_width=self.pix_width,
                              sigma_x=self.sigma_x, sigma_y=self.sigma_y,
                              eta=self.eta, x_skew0=self.x_skew0,
                              x_0=self.x_0, y_0=self.y_0, normalised=False)
-        norm = vals.sum()
+        norm = norm_img.sum()
 
         return norm
 
