@@ -16,7 +16,7 @@ from scipy.interpolate import RBFInterpolator
 from photutils.aperture import CircularAperture
 from photutils.utils._parameters import as_pair
 
-__all__ = ['EPSFModel', 'FittableImageModel', 'ImagePSF']
+__all__ = ['EPSFModel', 'FittableImageModel', 'ImagePSF', 'RBFInterpolatorImagePSF', 'RectBivariateSplineImagePSF']
 
 
 class ImagePSF(Fittable2DModel):
@@ -345,7 +345,7 @@ class ImagePSF(Fittable2DModel):
         yi = self.oversampling[0] * (np.asarray(y, dtype=float) - y_0)
         xi += self._origin[0]
         yi += self._origin[1]
-
+        
         evaluated_model = flux * self.interpolator(xi, yi, grid=False)
 
         if self.fill_value is not None:
@@ -405,6 +405,58 @@ class RBFInterpolatorImagePSF(ImagePSF):
 
         # Create the RBFInterpolator interpolator
         return RBFInterpolator(points, values, neighbors=self.neighbours, smoothing=self.smoothing, kernel=self.kernel, epsilon=self.epsilon, degree=self.degree)
+    
+    def evaluate(self, x, y, flux, x_0, y_0):
+        """
+        Calculate the value of the image model at the input coordinates
+        for the given model parameters.
+
+        Parameters
+        ----------
+        x, y : float or array_like
+            The x and y coordinates at which to evaluate the model.
+
+        flux : float
+            The total flux of the source, assuming the input image
+            was properly normalized.
+
+        x_0, y_0 : float
+            The x and y positions of the feature in the image in the
+            output coordinate grid on which the model is evaluated.
+
+        Returns
+        -------
+        result : `~numpy.ndarray`
+            The value of the model evaluated at the input coordinates.
+        """
+        xi = self.oversampling[1] * (np.asarray(x, dtype=float) - x_0)
+        yi = self.oversampling[0] * (np.asarray(y, dtype=float) - y_0)
+        xi += self._origin[0] 
+        yi += self._origin[1]
+
+        # Flatten xi and yi to 1D arrays
+        xi_flat = xi.ravel()
+        yi_flat = yi.ravel()
+
+        # Stack the flattened arrays to form a 2D array of shape (n, 2)
+        coordinates = np.column_stack((xi_flat, yi_flat))
+
+        # Now pass this to the interpolator
+        evaluated_model_flat = self.interpolator(coordinates)
+
+        evaluated_model = evaluated_model_flat.reshape(xi.shape)
+
+        evaluated_model = flux * evaluated_model
+        
+        if self.fill_value is not None:
+            # set pixels that are outside the input pixel grid to the
+            # fill_value to avoid extrapolation; these bounds match the
+            # RegularGridInterpolator bounds
+            ny, nx = self.data.shape
+            invalid = (xi < 0) | (xi > nx - 1) | (yi < 0) | (yi > ny - 1)
+            evaluated_model[invalid] = self.fill_value
+
+        return evaluated_model
     
 class RectBivariateSplineImagePSF(ImagePSF):
     """
