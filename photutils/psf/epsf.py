@@ -8,6 +8,7 @@ import copy
 import warnings
 
 import numpy as np
+from functools import partial
 from astropy.modeling.fitting import TRFLSQFitter
 from astropy.nddata.utils import NoOverlapError, PartialOverlapError
 from astropy.convolution import Gaussian2DKernel
@@ -443,7 +444,11 @@ class EPSFBuilder:
         self._sigma_clip = sigma_clip
 
         self.epsf_class = epsf_class
-        if not issubclass(self.epsf_class, ImagePSF):
+        if isinstance(self.epsf_class, partial):
+            candidate = self.epsf_class.func
+        else:
+            candidate = self.epsf_class
+        if not issubclass(candidate, ImagePSF):
             msg = 'epsf_class must be a subclass of ImagePSF'
             raise TypeError(msg)
         
