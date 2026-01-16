@@ -481,3 +481,155 @@ def test_move_column():
     assert tbl2.colnames == ['a', 'b', 'c']
     tbl3 = psfphot._move_column(tbl, 'b', 'b')
     assert tbl3.colnames == ['a', 'b', 'c']
+
+
+def test_iterative_model_residual_image_nonfinite_localbkg(test_data):
+    """
+    Test that make_model_image and make_residual_image handle non-finite
+    local background values correctly for IterativePSFPhotometry.
+
+    When include_localbkg=True and the local_bkg is non-finite (NaN or
+    inf), the non-finite value should be treated as 0 and not included
+    in the model or residual images.
+    """
+    data, error, _ = test_data
+
+    psf_model = CircularGaussianPRF(flux=1, fwhm=2.7)
+    fit_shape = (5, 5)
+    finder = DAOStarFinder(10.0, 2.0)
+
+    # Find sources and manually set some local_bkg values to non-finite
+    sources = finder(data)
+    sources['local_bkg'] = np.zeros(len(sources))
+    sources['local_bkg'][0] = np.nan
+    sources['local_bkg'][1] = np.inf
+    if len(sources) > 2:
+        sources['local_bkg'][2] = -np.inf
+
+    # Perform iterative PSF photometry with non-finite local_bkg
+    psfphot = IterativePSFPhotometry(psf_model, fit_shape, finder=finder,
+                                     aperture_radius=4, maxiters=2)
+    phot = psfphot(data, error=error, init_params=sources)
+
+    # Test make_model_image with include_localbkg=True
+    psf_shape = (15, 15)
+    model_with_bkg = psfphot.make_model_image(data.shape, psf_shape=psf_shape,
+                                              include_localbkg=True)
+    model_without_bkg = psfphot.make_model_image(
+        data.shape, psf_shape=psf_shape, include_localbkg=False)
+
+    # The model images should be finite everywhere
+    assert np.all(np.isfinite(model_with_bkg))
+    assert np.all(np.isfinite(model_without_bkg))
+
+    # For sources with non-finite local_bkg, the model with and without
+    # local_bkg should be identical (since non-finite is treated as 0)
+    # Check this by comparing the models at source positions
+    for i in range(min(3, len(phot))):
+        if not np.isfinite(phot['local_bkg'][i]):
+            x_fit = int(phot['x_fit'][i])
+            y_fit = int(phot['y_fit'][i])
+            assert_allclose(model_with_bkg[y_fit, x_fit],
+                            model_without_bkg[y_fit, x_fit], rtol=1e-6)
+
+
+def test_iterative_residual_image_localbkg_invalid_sources(test_data):
+    """
+    Test that make_residual_image handles sources with non-finite
+    local_bkg values and sources outside the image (invalid sources)
+    correctly for IterativePSFPhotometry.
+    """
+    data, error, _ = test_data
+
+    psf_model = CircularGaussianPRF(flux=1, fwhm=2.7)
+    fit_shape = (5, 5)
+    finder = DAOStarFinder(10.0, 2.0)
+
+    sources = finder(data)
+
+    # Add non-finite local_bkg values to init_params
+    sources['local_bkg'] = np.zeros(len(sources))
+    sources['local_bkg'][0] = np.nan
+    sources['local_bkg'][1] = np.inf
+    sources['local_bkg'][2] = -np.inf
+    # Add an invalid source outside the image
+    sources['xcentroid'][-3] = 1000
+    sources['ycentroid'][-3] = 1000
+
+    # Perform iterative PSF photometry with init_params containing
+    # non-finite local_bkg
+    psfphot = IterativePSFPhotometry(psf_model, fit_shape, finder=finder,
+                                     aperture_radius=4, maxiters=2)
+    psfphot(data, error=error, init_params=sources)
+
+    residual_img = psfphot.make_residual_image(data, include_localbkg=True)
+
+    assert residual_img.shape == data.shape
+    assert np.all(np.isfinite(residual_img))
+
+
+def test_decode_flags():
+    """
+    Test the decode_flags convenience method.
+    """
+    # Create test data with some sources that will have flags
+    yy, xx = np.mgrid[:21, :21]
+    psf_model = CircularGaussianPRF(flux=1, x_0=10, y_0=10, fwhm=2)
+
+    # Source 1: normal source (no flags expected)
+    m1 = CircularGaussianPRF(flux=100, x_0=10, y_0=10, fwhm=2)
+    # Source 2: negative flux (will have negative_flux flag)
+    m2 = CircularGaussianPRF(flux=-50, x_0=5, y_0=5, fwhm=2)
+    # Source 3: outside bounds (will have outside_bounds flag)
+    m3 = CircularGaussianPRF(flux=100, x_0=25, y_0=25, fwhm=2)
+
+    data = m1(xx, yy) + m2(xx, yy) + m3(xx, yy)
+
+    init_params = Table({
+        'x': [10, 5, 25],
+        'y': [10, 5, 25],
+        'flux': [100, 100, 100],
+    })
+
+    finder = DAOStarFinder(6.0, 2.0)
+    psfphot = IterativePSFPhotometry(psf_model, (3, 3), finder=finder,
+                                     aperture_radius=4, maxiters=1)
+
+    # Test that decode_flags raises ValueError before running photometry
+    match = 'No results available'
+    with pytest.raises(ValueError, match=match):
+        psfphot.decode_flags()
+
+    # Run photometry
+    results = psfphot(data, init_params=init_params)
+
+    # Test decode_flags method
+    decoded_flags = psfphot.decode_flags()
+
+    # Check that we get a list of lists
+    assert isinstance(decoded_flags, list)
+    assert len(decoded_flags) == len(results)
+
+    # Each element should be a list of strings
+    for decoded in decoded_flags:
+        assert isinstance(decoded, list)
+        for flag_name in decoded:
+            assert isinstance(flag_name, str)
+
+    # Check that the first source has no flags or minimal flags
+    # (depending on fitting success)
+    assert isinstance(decoded_flags[0], list)
+
+    # Check that the second source has the negative_flux flag
+    assert 'negative_flux' in decoded_flags[1]
+
+    # Check that the third source has flags (it's outside the image bounds)
+    # It should have 'no_overlap' since it's completely outside
+    assert len(decoded_flags[2]) > 0
+    assert 'no_overlap' in decoded_flags[2]
+
+    # Verify that decode_flags gives the same result as calling
+    # decode_psf_flags directly
+    from photutils.psf.flags import decode_psf_flags
+    direct_decoded = decode_psf_flags(results['flags'])
+    assert decoded_flags == direct_decoded

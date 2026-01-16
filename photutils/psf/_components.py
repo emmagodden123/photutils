@@ -9,18 +9,20 @@ of the PSFPhotometry class and are not intended for direct public use.
 import contextlib
 import warnings
 import weakref
+from copy import deepcopy
 
 import astropy
 import astropy.units as u
 import numpy as np
 from astropy.modeling import Fittable2DModel, Parameter
 from astropy.modeling.fitting import TRFLSQFitter
-from astropy.nddata import NoOverlapError
+from astropy.nddata import NDData, NoOverlapError
 from astropy.table import QTable, Table, hstack, join
 from astropy.utils import minversion
 from astropy.utils.exceptions import AstropyUserWarning
 
 from photutils.aperture import CircularAperture
+from photutils.datasets import make_model_image as _make_model_image
 from photutils.utils._misc import _get_meta
 from photutils.utils.cutouts import _overlap_slices as overlap_slices
 
@@ -422,8 +424,7 @@ class PSFDataProcessor:
             If ``init_params`` is not an astropy Table.
 
         ValueError
-            If required position columns are missing or if local_bkg
-            contains non-finite values.
+            If required position columns are missing.
         """
         if init_params is None:
             return init_params
@@ -448,10 +449,8 @@ class PSFDataProcessor:
             init_params = self.normalize_init_units(init_params, flux_col)
 
         if 'local_bkg' in init_params.colnames:
-            if not np.all(np.isfinite(init_params['local_bkg'])):
-                msg = ('init_params local_bkg column contains non-finite '
-                       'values')
-                raise ValueError(msg)
+            # Non-finite local_bkg will not be subtracted, and a flag
+            # will be set in the results.
             init_params = self.normalize_init_units(init_params, 'local_bkg')
 
         return init_params
@@ -629,7 +628,20 @@ class PSFDataProcessor:
             flux = self.get_aper_fluxes(data, mask, init_params)
             if self.data_unit is not None:
                 flux <<= self.data_unit
-            flux -= init_params['local_bkg']
+
+            # Only subtract local_bkg if it's finite
+            local_bkg = init_params['local_bkg']
+            if hasattr(local_bkg, 'value'):
+                # Handle Quantity
+                local_bkg_vals = local_bkg.value
+            else:
+                local_bkg_vals = np.asarray(local_bkg)
+
+            # Subtract only finite local_bkg values
+            finite_mask = np.isfinite(local_bkg_vals)
+            if np.any(finite_mask):
+                flux[finite_mask] -= local_bkg[finite_mask]
+
             init_params[flux_col] = flux
 
         return init_params
@@ -674,15 +686,20 @@ class PSFDataProcessor:
             True if the source should be skipped, False otherwise.
 
         reason : str or None
-            Reason for skipping ('invalid_position', 'no_overlap')
-            or None if not skipping.
+            Reason for skipping ('invalid_position', 'non_finite_flux',
+            'no_overlap') or None if not skipping.
         """
         x_cen = row[self.param_mapper.init_colnames['x']]
         y_cen = row[self.param_mapper.init_colnames['y']]
+        flux_init = row[self.param_mapper.init_colnames['flux']]
 
         # check for non-finite positions
         if not (np.isfinite(x_cen) and np.isfinite(y_cen)):
             return True, 'invalid_position'
+
+        # check for non-finite flux
+        if not np.isfinite(flux_init):
+            return True, 'non_finite_flux'
 
         # source that are clearly beyond any possible overlap
         half_fit = max(self.fit_shape) // 2
@@ -772,11 +789,17 @@ class PSFDataProcessor:
         cutout = data[yy_flat, xx_flat]
 
         # Local background subtraction (local_bkg = 0 if not provided)
+        # Only subtract if the local_bkg is finite (not NaN or inf)
         local_bkg = row['local_bkg']
         if np.any(local_bkg != 0):
             if isinstance(local_bkg, u.Quantity):
-                local_bkg = local_bkg.value
-            cutout -= local_bkg
+                local_bkg_value = local_bkg.value
+            else:
+                local_bkg_value = local_bkg
+
+            # Only subtract if local_bkg is finite
+            if np.isfinite(local_bkg_value):
+                cutout -= local_bkg_value
 
         # Center pixel index (before trimming)
         x_cen_idx = np.ceil(x_cen - 0.5).astype(int)
@@ -1322,7 +1345,8 @@ class PSFResultsAssembler:
         return qfit, cfit, reduced_chi2
 
     def define_flags(self, results_tbl, shape, fit_error_indices, fit_info,
-                     fitted_models_table, valid_mask, invalid_reasons):
+                     fitted_models_table, valid_mask, invalid_reasons,
+                     init_params):
         """
         Define per-source bitwise flags summarizing fit conditions.
 
@@ -1349,6 +1373,9 @@ class PSFResultsAssembler:
         invalid_reasons : list or None
             List of reasons why sources were invalid.
 
+        init_params : `~astropy.table.QTable`
+            Initial parameter guesses for sources, containing local_bkg.
+
         Returns
         -------
         flags : `~numpy.ndarray`
@@ -1363,6 +1390,9 @@ class PSFResultsAssembler:
             - 64: no overlap with data
             - 128: fully masked source
             - 256: too few pixels for fitting
+            - 512: non-finite fitted position
+            - 1024: non-finite fitted flux
+            - 2048: non-finite local background
         """
         flags = np.zeros(len(results_tbl), dtype=int)
         x_col = self.param_mapper.fit_colnames['x']
@@ -1427,6 +1457,29 @@ class PSFResultsAssembler:
             flags[reasons == 'no_overlap'] |= PSF_FLAGS.NO_OVERLAP
             flags[reasons == 'fully_masked'] |= PSF_FLAGS.FULLY_MASKED
             flags[reasons == 'too_few_pixels'] |= PSF_FLAGS.TOO_FEW_PIXELS
+            flags[reasons == 'non_finite_flux'] |= PSF_FLAGS.NON_FINITE_FLUX
+
+        # Flag=512: non-finite fitted position
+        x_col = self.param_mapper.fit_colnames['x']
+        y_col = self.param_mapper.fit_colnames['y']
+        x_fit = results_tbl[x_col]
+        y_fit = results_tbl[y_col]
+        non_finite_pos_mask = ~np.isfinite(x_fit) | ~np.isfinite(y_fit)
+        flags[non_finite_pos_mask] |= PSF_FLAGS.NON_FINITE_POSITION
+
+        # Flag=1024: non-finite fitted flux (also check fitted values)
+        flux_col = self.param_mapper.fit_colnames['flux']
+        flux_fit = results_tbl[flux_col]
+        non_finite_flux_mask = ~np.isfinite(flux_fit)
+        flags[non_finite_flux_mask] |= PSF_FLAGS.NON_FINITE_FLUX
+
+        # Flag=2048: non-finite local background
+        local_bkg_vals = init_params['local_bkg']
+        if hasattr(local_bkg_vals, 'value'):
+            # Handle Quantity
+            local_bkg_vals = local_bkg_vals.value
+        non_finite_bkg_mask = ~np.isfinite(local_bkg_vals)
+        flags[non_finite_bkg_mask] |= PSF_FLAGS.NON_FINITE_LOCALBKG
 
         return flags
 
@@ -1502,7 +1555,8 @@ class PSFResultsAssembler:
         state.pop('reduced_chi2', None)
 
         # Calculate flags and check for convergence warnings before cleanup
-        fit_params['flags'] = define_flags_func(fit_params, data_shape)
+        fit_params['flags'] = define_flags_func(
+            fit_params, data_shape, init_params)
 
         # Join the fit_params table (with metrics and flags) to the
         # init_params table. By default, join will sort the rows by the
@@ -1537,3 +1591,154 @@ class PSFResultsAssembler:
 
         # Convert to QTable and set metadata
         return QTable(results_tbl, meta=meta)
+
+
+def _make_model_image_docstring(func):
+    func.__doc__ = """
+        Create a 2D image from the fit PSF models and optional local
+        background.
+
+        Parameters
+        ----------
+        shape : 2 tuple of int
+            The shape of the output array.
+
+        psf_shape : 2-tuple of int, optional
+            The shape of the region around the center of the fit model
+            to render in the output image. If ``psf_shape`` is a scalar
+            integer, then a square shape of size ``psf_shape`` will be
+            used. If `None`, then the bounding box of the model will be
+            used. This keyword must be specified if the model does not
+            have a ``bounding_box`` attribute.
+
+        include_localbkg : bool, optional
+            Whether to include the local background in the rendered
+            output image. Note that the local background level is
+            included around each source over the region defined by
+            ``psf_shape``. Thus, regions where the ``psf_shape`` of
+            sources overlap will have the local background added
+            multiple times. Non-finite local background values (NaN or
+            inf) are treated as zero and not included in the output
+            image.
+
+        Returns
+        -------
+        array : 2D `~numpy.ndarray`
+            The rendered image from the fit PSF models. This image will
+            not have any units.
+        """
+    return func
+
+
+def _make_residual_image_docstring(func):
+    func.__doc__ = """
+        Create a 2D residual image from the fit PSF models and local
+        background.
+
+        Parameters
+        ----------
+        data : 2D `~numpy.ndarray`
+            The 2D array on which photometry was performed. This should
+            be the same array input when calling the PSF-photometry
+            class.
+
+        psf_shape : 2-tuple of int, optional
+            The shape of the region around the center of the fit model
+            to subtract. If ``psf_shape`` is a scalar integer, then
+            a square shape of size ``psf_shape`` will be used. If
+            `None`, then the bounding box of the model will be used.
+            This keyword must be specified if the model does not have a
+            ``bounding_box`` attribute.
+
+        include_localbkg : bool, optional
+            Whether to include the local background in the subtracted
+            model. Note that the local background level is subtracted
+            around each source over the region defined by ``psf_shape``.
+            Thus, regions where the ``psf_shape`` of sources overlap
+            will have the local background subtracted multiple times.
+            Non-finite local background values (NaN or inf) are not
+            subtracted from the residual image.
+
+        Returns
+        -------
+        array : 2D `~numpy.ndarray`
+            The residual image of the ``data`` minus the fit PSF models
+            minus the optional``local_bkg``.
+        """
+    return func
+
+
+class _ModelImageMaker:
+    """
+    Class to create model and residual images from fit PSF models.
+
+    Parameters
+    ----------
+    psf_model : `astropy.modeling.Model`
+        The PSF model.
+
+    model_params : `~astropy.table.Table`
+        The model parameters.
+
+    local_bkg : `~numpy.ndarray`, optional
+        The local background values.
+
+    progress_bar : bool, optional
+        Whether to display a progress bar.
+    """
+
+    def __init__(self, psf_model, model_params, local_bkg=None,
+                 progress_bar=False):
+        self.psf_model = psf_model
+        self.model_params = model_params
+        self.local_bkg = local_bkg
+        self.progress_bar = progress_bar
+
+    @_make_model_image_docstring
+    def make_model_image(self, shape, *, psf_shape=None,
+                         include_localbkg=False):
+        psf_model = self.psf_model
+        model_params = self.model_params
+        local_bkgs = self.local_bkg
+        progress_bar = self.progress_bar
+
+        if include_localbkg:
+            # add local_bkg, but set non-finite values to 0 to avoid
+            # corrupting the model image
+            model_params = model_params.copy()
+            local_bkgs_clean = local_bkgs.copy()
+            # Replace non-finite values with 0
+            nonfinite_mask = ~np.isfinite(local_bkgs_clean)
+            if np.any(nonfinite_mask):
+                local_bkgs_clean[nonfinite_mask] = 0
+            model_params['local_bkg'] = local_bkgs_clean
+
+        try:
+            x_name = psf_model.x_name
+            y_name = psf_model.y_name
+        except AttributeError:
+            x_name = 'x_0'
+            y_name = 'y_0'
+
+        return _make_model_image(shape, psf_model, model_params,
+                                 model_shape=psf_shape,
+                                 x_name=x_name, y_name=y_name,
+                                 progress_bar=progress_bar)
+
+    @_make_residual_image_docstring
+    def make_residual_image(self, data, *, psf_shape=None,
+                            include_localbkg=False):
+        if isinstance(data, NDData):
+            residual = deepcopy(data)
+            data_arr = data.data
+            if data.unit is not None:
+                data_arr <<= data.unit
+            residual.data[:] = self.make_residual_image(
+                data_arr, psf_shape=psf_shape,
+                include_localbkg=include_localbkg)
+        else:
+            residual = self.make_model_image(data.shape, psf_shape=psf_shape,
+                                             include_localbkg=include_localbkg)
+            np.subtract(data, residual, out=residual)
+
+        return residual

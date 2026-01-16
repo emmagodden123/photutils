@@ -5,22 +5,24 @@ Define tools to perform iterative PSF-fitting photometry.
 
 import warnings
 from copy import deepcopy
-from itertools import chain
 
 import numpy as np
 from astropy.nddata import NDData
 from astropy.table import QTable, vstack
-from astropy.utils import lazyproperty
 
+from photutils.psf._components import (_make_model_image_docstring,
+                                       _make_residual_image_docstring,
+                                       _ModelImageMaker)
+from photutils.psf.flags import decode_psf_flags
 from photutils.psf.photometry import PSFPhotometry
-from photutils.psf.utils import ModelImageMixin, _create_call_docstring
+from photutils.psf.utils import _create_call_docstring
 from photutils.utils._repr import make_repr
 from photutils.utils.exceptions import NoDetectionsWarning
 
 __all__ = ['IterativePSFPhotometry']
 
 
-class IterativePSFPhotometry(ModelImageMixin):
+class IterativePSFPhotometry:
     """
     Class to iteratively perform PSF photometry.
 
@@ -271,7 +273,6 @@ class IterativePSFPhotometry(ModelImageMixin):
         """
         self.fit_results = []
         self.results = None
-        self.__dict__.pop('_model_image_params', None)  # lazyproperty
 
     def __repr__(self):
         params = ('psf_model', 'fit_shape', 'finder', 'grouper', 'fitter',
@@ -566,7 +567,7 @@ class IterativePSFPhotometry(ModelImageMixin):
 
         return phot_tbl
 
-    def results_to_init_params(self):
+    def results_to_init_params(self, *, remove_invalid=True, reset_ids=True):
         """
         Create a table of the fitted model parameters from the results.
 
@@ -574,12 +575,22 @@ class IterativePSFPhotometry(ModelImageMixin):
         initial parameters table. It can be used as the ``init_params``
         for subsequent `PSFPhotometry` fits.
 
-        Rows that contain non-finite fitted values are removed.
-        """
-        return self._psfphot._results_to_init_params(self.results,
-                                                     reset_id=True)
+        Parameters
+        ----------
+        remove_invalid : bool, optional
+            If `True`, rows that contain non-finite fitted values are
+            removed.
 
-    def results_to_model_params(self):
+        reset_ids : bool, optional
+            If `True`, the 'id' column will be reset to a sequential
+            numbering starting from 1. If `False`, the 'id' column will
+            remain unchanged from the results table. This option is
+            ignored if ``remove_invalid`` is `False`.
+        """
+        return self._psfphot._results_to_init_params(
+            self.results, remove_invalid=remove_invalid, reset_ids=reset_ids)
+
+    def results_to_model_params(self, *, remove_invalid=True, reset_ids=True):
         """
         Create a table of the fitted model parameters from the results.
 
@@ -587,69 +598,132 @@ class IterativePSFPhotometry(ModelImageMixin):
         names. It can also be used to reconstruct the fitted PSF models
         for visualization or further analysis.
 
-        Rows that contain non-finite fitted values are removed.
+        Parameters
+        ----------
+        remove_invalid : bool, optional
+            If `True`, rows that contain non-finite fitted values are
+            removed.
+
+        reset_ids : bool, optional
+            If `True`, the 'id' column will be reset to a sequential
+            numbering starting from 1. If `False`, the 'id' column will
+            remain unchanged from the results table. This option is
+            ignored if ``remove_invalid`` is `False`.
         """
         return self._psfphot._results_to_model_params(
-            self.results, self._psfphot._param_mapper, reset_id=True)
+            self.results, self._psfphot._param_mapper,
+            remove_invalid=remove_invalid, reset_ids=reset_ids)
 
-    @lazyproperty
-    def _model_image_params(self):
+    def decode_flags(self, return_bit_values=False):
         """
-        A helper property that provides the necessary parameters to
-        ModelImageMixin.
+        Decode the PSF photometry flags from the results table.
+
+        This is a convenience method that calls
+        `~photutils.psf.decode_psf_flags` with the 'flags' column
+        from the results table.
+
+        Parameters
+        ----------
+        return_bit_values : bool, optional
+            If `True`, return the decoded bit flags (integers) instead
+            of the flag descriptions (strings). Default is `False`.
+
+        Returns
+        -------
+        decoded : list of list of str or list of list of int
+            List of lists where each inner list contains the active flag
+            names (or bit values) for the corresponding source in the
+            results table. If no flags are set for a source, an empty
+            list is returned for that source.
+
+        Raises
+        ------
+        ValueError
+            If no results are available. Please run the
+            IterativePSFPhotometry instance first.
+
+        See Also
+        --------
+        photutils.psf.decode_psf_flags
+
+        Examples
+        --------
+        Decode flags from iterative PSF photometry results:
+
+        >>> import numpy as np
+        >>> from astropy.table import Table
+        >>> from photutils.detection import DAOStarFinder
+        >>> from photutils.psf import (CircularGaussianPRF,
+        ...                            IterativePSFPhotometry)
+        >>> yy, xx = np.mgrid[:21, :21]
+        >>> psf_model = CircularGaussianPRF(flux=1, x_0=10, y_0=10, fwhm=2)
+        >>> # Create sources with one having negative flux
+        >>> m1 = CircularGaussianPRF(flux=100, x_0=10, y_0=10, fwhm=2)
+        >>> m2 = CircularGaussianPRF(flux=-50, x_0=5, y_0=5, fwhm=2)
+        >>> data = m1(xx, yy) + m2(xx, yy)
+        >>> init_params = Table({'x': [10, 5], 'y': [10, 5],
+        ...                      'flux': [100, 100]})
+        >>> finder = DAOStarFinder(6.0, 2.0)
+        >>> photometry = IterativePSFPhotometry(psf_model, (3, 3),
+        ...                                     finder=finder,
+        ...                                     aperture_radius=4,
+        ...                                     maxiters=1)
+        >>> results = photometry(data, init_params=init_params)
+        >>> decoded_flags = photometry.decode_flags()
+        >>> for i, flags in enumerate(decoded_flags):
+        ...     print(f'Source {i+1}: {flags}')  # doctest: +SKIP
+        Source 1: []
+        Source 2: ['negative_flux']
         """
-        psf_model = self._psfphot.psf_model
-        progress_bar = self._psfphot.progress_bar
-
-        if self.mode == 'new':
-            # in 'new' mode: we stack the results from all iterations
-            all_fit_params = []
-            all_local_bkgs = []
-            for result_obj in self.fit_results:
-                fm_tbl = result_obj.results_to_model_params()
-                if fm_tbl is not None:
-                    all_fit_params.append(fm_tbl)
-                    all_local_bkgs.append(result_obj.init_params['local_bkg'])
-
-            fit_params = vstack(all_fit_params) if all_fit_params else None
-            local_bkgs = list(chain.from_iterable(all_local_bkgs))
-
-        elif self.mode == 'all':
-            # in 'all' mode: only the final iteration contains all sources
-            final_result = self.fit_results[-1]
-            fit_params = final_result.results_to_model_params()
-            local_bkgs = final_result.init_params['local_bkg']
-
-        else:  # pragma: no cover
-            # should never happen due to the mode validation in __init__
-            msg = f'Invalid mode "{self.mode}"'
+        if self.results is None:
+            msg = ('No results available. Please run the '
+                   'IterativePSFPhotometry instance first.')
             raise ValueError(msg)
 
-        return {'psf_model': psf_model,
-                'model_params': fit_params,
-                'local_bkg': local_bkgs,
-                'progress_bar': progress_bar,
-                }
+        return decode_psf_flags(self.results['flags'],
+                                return_bit_values=return_bit_values)
 
+    def _get_model_image_params(self):
+        # Convert fitted parameters to model parameter names without
+        # filtering, so the row indices align with self.results
+        model_params = self.results_to_model_params(remove_invalid=False)
+
+        # Filter out invalid sources (those with NaN fitted values)
+        keep = np.all([np.isfinite(model_params[col])
+                       for col in model_params.colnames], axis=0)
+        model_params = model_params[keep]
+
+        # Extract local_bkg for the same valid sources
+        local_bkg = self.results['local_bkg'][keep]
+
+        return model_params, local_bkg
+
+    @_make_model_image_docstring
     def make_model_image(self, shape, *, psf_shape=None,
                          include_localbkg=False):
-
         if not self.fit_results:
             msg = ('No results available. Please run the '
                    'IterativePSFPhotometry instance first.')
             raise ValueError(msg)
 
-        return ModelImageMixin.make_model_image(
-            self, shape, psf_shape=psf_shape,
-            include_localbkg=include_localbkg)
+        model_params, local_bkg = self._get_model_image_params()
+        maker = _ModelImageMaker(self._psfphot.psf_model, model_params,
+                                 local_bkg=local_bkg,
+                                 progress_bar=self._psfphot.progress_bar)
+        return maker.make_model_image(shape, psf_shape=psf_shape,
+                                      include_localbkg=include_localbkg)
 
+    @_make_residual_image_docstring
     def make_residual_image(self, data, *, psf_shape=None,
                             include_localbkg=False):
-
         if not self.fit_results:
             msg = ('No results available. Please run the '
                    'IterativePSFPhotometry instance first.')
             raise ValueError(msg)
 
-        return ModelImageMixin.make_residual_image(
-            self, data, psf_shape=psf_shape, include_localbkg=include_localbkg)
+        model_params, local_bkg = self._get_model_image_params()
+        maker = _ModelImageMaker(self._psfphot.psf_model, model_params,
+                                 local_bkg=local_bkg,
+                                 progress_bar=self._psfphot.progress_bar)
+        return maker.make_residual_image(data, psf_shape=psf_shape,
+                                         include_localbkg=include_localbkg)
