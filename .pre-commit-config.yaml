@@ -55,13 +55,13 @@ repos:
         # Enforce that all noqa annotations always occur with specific codes.
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: "v0.14.3"
+    rev: "v0.14.10"
     hooks:
       - id: ruff-check
         args: ["--fix", "--show-fixes"]
 
   - repo: https://github.com/scientific-python/cookie
-    rev: 2025.10.20
+    rev: 2025.11.21
     hooks:
       - id: sp-repo-review
 
@@ -91,31 +91,28 @@ repos:
           - tomli
 
   - repo: https://github.com/numpy/numpydoc
-    rev: v1.9.0
+    rev: v1.10.0
     hooks:
       - id: numpydoc-validation
         exclude: "extern/"
 
+  # TMP: disabled until new release (Python 3.14 support and without
+  #      requiring untokenize) and various regressions are fixed
   # Formats docstrings to follow PEP 257
-  - repo: https://github.com/PyCQA/docformatter
-    rev: v1.7.7
-    hooks:
-      - id: docformatter
-        args: [--in-place, --config, ./pyproject.toml]
-        exclude: "extern/"
+  # - repo: https://github.com/PyCQA/docformatter
+  #   rev: v1.7.7
+  #   hooks:
+  #     - id: docformatter
+  #       args: [--in-place, --config, ./pyproject.toml]
+  #       exclude: "extern/"
 
   - repo: https://github.com/woodruffw/zizmor-pre-commit
-    rev: v1.16.2
+    rev: v1.19.0
     hooks:
     - id: zizmor
 
   - repo: https://github.com/sphinx-contrib/sphinx-lint
-    rev: v1.0.1
+    rev: v1.0.2
     hooks:
       - id: sphinx-lint
         exclude: "(docs/_build/|photutils/extern/)"
-
-  # - repo: https://github.com/MarcoGorelli/absolufy-imports
-  #   rev: v0.3.1
-  #   hooks:
-  #   - id: absolufy-imports

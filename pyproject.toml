@@ -35,7 +35,7 @@ requires-python = '>=3.11'
 dependencies = [
     'numpy >= 2.0',
     'scipy >= 1.13',
-    'astropy >= 6.1.1',
+    'astropy >= 6.1.4',
 ]
 
 [project.urls]
@@ -73,7 +73,7 @@ dev = [
 requires = [
     'setuptools >= 77.0',
     'setuptools_scm >= 8.1',
-    'cython >= 3.1, < 4',
+    'cython >= 3.1.2, < 4',
     'numpy >= 2.0',
     'extension-helpers >= 1.3, < 2',
 ]
@@ -129,6 +129,7 @@ addopts = [
     '--strict-config',
     '--strict-markers',
 ]
+log_level = 'INFO'
 log_cli_level = 'INFO'
 xfail_strict = true
 remote_data_strict = true
@@ -195,6 +196,8 @@ ignore = [
     'PC140',  # ignore using mypy in pre-commit
     'PC180',  # ignore using prettier in pre-commit
     'PC901',  # ignore using custom pre-commit update message
+    'PC902',  # ignore custom pre-commit CI autofix message
+    'PP006',  # ignore missing dependency-groups in pyproject.toml
     'PY005',  # ignore having a tests/ folder
 ]
 
@@ -240,19 +243,22 @@ exclude = [
     'BackgroundRMS$',
     'RadialProfile$',
 
+    # GL08: docstrings defined by a decorator
+    '\.plot_grid$',
+    'PSFPhotometry\.make_model_image$',
+    'PSFPhotometry\.make_residual_image$',
+    'IterativePSFPhotometry\.make_model_image$',
+    'IterativePSFPhotometry\.make_residual_image$',
+
     # GL08: docstrings inherited from base classes
     '\.to_mask$',
     '\.calc_background$',
     '\.calc_background_rms$',
-    '\.make_model_image$',
-    '\.make_residual_image$',
 
     # GL08: property setters
     '\.normalization_correction$',
     '\.origin$',
     '\.fill_value$',
-    '\.make_model_image$',
-    '\.make_residual_image$',
     '\.cutout_center$',
     '\.data',
 
@@ -305,3 +311,6 @@ ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = 'numpy'
+
+[tool.distutils.bdist_wheel]
+py-limited-api = "cp311"

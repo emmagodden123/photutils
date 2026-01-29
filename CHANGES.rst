@@ -12,6 +12,8 @@ General
 
 - The minimum required scikit-image is now 0.23. [#2115]
 
+- The minimum required astropy is now 6.1.4. [#2130]
+
 New Features
 ^^^^^^^^^^^^
 
@@ -25,8 +27,31 @@ New Features
     sources and provides methods to analyze and plot the groupings.
     [#2116]
 
+  - Added ``remove_invalid`` and ``reset_ids`` keywords to the
+    ``results_to_init_params`` and ``results_to_model_params`` methods of
+    ``PSFPhotometry`` and ``IterativePSFPhotometry``. [#2131]
+
+  - Added a ``decode_flags`` convenience method to ``PSFPhotometry`` and
+    ``IterativePSFPhotometry`` classes to decode the bitwise flags from
+    the results table. [#2132, #2136]
+
+  - Added a ``return_bit_flags`` keyword to the ``decode_psf_flags``
+    function. [#2136]
+
+  - Added ``__repr__`` methods to ``ImagePSF`` and ``GriddedPSFModel``.
+    [#2134]
+
 Bug Fixes
 ^^^^^^^^^
+
+- ``photutils.psf``
+
+  - ``PSFPhotometry`` and ``IterativePSFPhotometry`` now handle
+    non-finite (NaN or inf) local background values instead of raising
+    an error. Three new flags have been added to identify sources with
+    non-finite values: flag 512 for non-finite fitted positions, flag
+    1024 for non-finite fitted flux, and flag 2048 for non-finite local
+    background. [#2131]
 
 API Changes
 ^^^^^^^^^^^
@@ -59,6 +84,10 @@ API Changes
 
   - The ``grid_from_epsfs`` helper function is now deprecated. Instead,
     use ``GriddedPSFModel`` directly. [#2111]
+
+  - Removed the ``ModelImageMixin`` class. [#2133]
+
+  - Removed the ``ModelGridPlotMixin`` class. [#2137]
 
 
 2.3.0 (2025-09-15)

@@ -16,19 +16,19 @@ from scipy.interpolate import RectBivariateSpline
 from photutils.psf.model_io import (GriddedPSFModelRead, _get_metadata,
                                     _read_stdpsf, is_stdpsf, is_webbpsf,
                                     stdpsf_reader, webbpsf_reader)
-from photutils.psf.model_plotting import ModelGridPlotMixin
+from photutils.psf.model_plotting import (_ModelGridPlotter,
+                                          _plot_grid_docstring)
 from photutils.utils._parameters import as_pair
 
 __all__ = ['GriddedPSFModel', 'STDPSFGrid']
 __doctest_skip__ = ['STDPSFGrid']
 
 
-class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
+class GriddedPSFModel(Fittable2DModel):
     """
     A model for a grid of 2D ePSF models.
 
     The ePSF models are defined at fiducial detector locations and are
-    bilinearly interpolated to calculate an ePSF model at an arbitrary
     (x, y) detector position. The fiducial detector locations are must
     form a rectangular grid.
 
@@ -278,23 +278,29 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
         idx = np.lexsort((grid_xypos[:, 0], grid_xypos[:, 1]))
         return nddata.data[idx], grid_xypos[idx]
 
-    def _cls_info(self):
-        cls_info = []
+    def __str__(self):
+        keywords = []
 
-        keys = ('STDPSF', 'instrument', 'detector', 'filter', 'grid_shape')
+        keys = ('STDPSF', 'instrument', 'detector', 'filter')
         for key in keys:
             if key in self.meta:
                 name = key.capitalize() if key != 'STDPSF' else key
-                cls_info.append((name, self.meta[key]))
+                keywords.append((name, self.meta[key]))
 
-        cls_info.extend([('Number of PSFs', len(self.grid_xypos)),
+        keywords.extend([('Number of PSFs', len(self.grid_xypos)),
+                         ('Grid shape', self.meta['grid_shape']),
+                         ('Grid positions', self.grid_xypos.tolist()),
                          ('PSF shape (oversampled pixels)',
                           self.data.shape[1:]),
-                         ('Oversampling', tuple(self.oversampling))])
-        return cls_info
+                         ('Oversampling', self.oversampling.tolist()),
+                         ('Fill Value', self.fill_value)])
 
-    def __str__(self):
-        return self._format_str(keywords=self._cls_info())
+        return self._format_str(keywords=keywords)
+
+    def __repr__(self):
+        kwargs = {'oversampling': self.oversampling.tolist(),
+                  'fill_value': self.fill_value}
+        return self._format_repr(args=[], kwargs=kwargs)
 
     @property
     def data(self):
@@ -660,8 +666,19 @@ class GriddedPSFModel(ModelGridPlotMixin, Fittable2DModel):
 
         return evaluated_model
 
+    @_plot_grid_docstring
+    def plot_grid(self, *, ax=None, vmax_scale=None, peak_norm=False,
+                  deltas=False, cmap='viridis', dividers=True,
+                  divider_color='darkgray', divider_ls='-', figsize=None):
+        plotter = _ModelGridPlotter(self)
+        return plotter.plot_grid(ax=ax, vmax_scale=vmax_scale,
+                                 peak_norm=peak_norm, deltas=deltas,
+                                 cmap=cmap, dividers=dividers,
+                                 divider_color=divider_color,
+                                 divider_ls=divider_ls, figsize=figsize)
 
-class STDPSFGrid(ModelGridPlotMixin):
+
+class STDPSFGrid:
     """
     Class to read and plot "STDPSF" format ePSF model grids.
 
@@ -706,6 +723,17 @@ class STDPSFGrid(ModelGridPlotMixin):
             meta.update(file_meta)
 
         self.meta = meta
+
+    @_plot_grid_docstring
+    def plot_grid(self, *, ax=None, vmax_scale=None, peak_norm=False,
+                  deltas=False, cmap='viridis', dividers=True,
+                  divider_color='darkgray', divider_ls='-', figsize=None):
+        plotter = _ModelGridPlotter(self)
+        return plotter.plot_grid(ax=ax, vmax_scale=vmax_scale,
+                                 peak_norm=peak_norm, deltas=deltas,
+                                 cmap=cmap, dividers=dividers,
+                                 divider_color=divider_color,
+                                 divider_ls=divider_ls, figsize=figsize)
 
     def __str__(self):
         cls_name = f'<{self.__class__.__module__}.{self.__class__.__name__}>'
