@@ -360,103 +360,111 @@ class ImagePSF(Fittable2DModel):
     
 class RBFInterpolatorImagePSF(ImagePSF):
     """
-    A subclass of ImagePSF that uses RBFInterpolator for interpolation.
+    ImagePSF that uses scipy.interpolate.RBFInterpolator for interpolation.
+    The interpolator is built lazily and cached to avoid rebuilding on every evaluate().
     """
-
     def __init__(self, data, *, flux=1.0, x_0=0.0, y_0=0.0, origin=None,
-                 oversampling=1, fill_value=0.0, neighbours=None, smoothing=0.0, kernel='cubic', epsilon=None, degree=None, **kwargs):
-        """
-        Parameters:
-        ----------
-        data : 2D `numpy.ndarray`
-            The PSF image data. Should already be normalised.
-        flux, x_0, y_0, origin, oversampling, fill_value : various, optional
-            Same as in the parent class.
-        neighbours : int, optional
-            The number of neighboring points to use for the RBF interpolation.
-        smoothing : float, optional
-            Smoothing factor for the RBF interpolation.
-        kernel : str, optional
-            The radial basis function, e.g., 'linear', 'cubic', 'thin_plate_spline', etc. Default is 'cubic'.
-        epsilon : float, optional
-            Shape parameter for certain RBF kernels.
-        degree : int, optional
-            Degree of the polynomial term added to the RBF. Only used for
-            certain kernels.
-        """
+                 oversampling=1, fill_value=0.0, neighbours=None, smoothing=0.0,
+                 kernel='cubic', epsilon=None, degree=None, **kwargs):
+        # store RBF params
         self.neighbours = neighbours
         self.smoothing = smoothing
         self.kernel = kernel
         self.epsilon = epsilon
         self.degree = degree
-        super().__init__(data, flux=flux, x_0=x_0, y_0=y_0, origin=origin,
-                         oversampling=oversampling, fill_value=fill_value, **kwargs)
+
+        # normalize/keep data; make sure it's an ndarray
+        self.data = np.asarray(data)  # keep a reference; if you mutate it, call invalidate_interpolator()
+        self._values = self.data.ravel()
+
+        # precompute grid points (x,y order consistent with evaluate coords)
+        ny, nx = self.data.shape
+        yy, xx = np.indices((ny, nx))
+        # Use (x,y) ordering for coordinates (matches how evaluate stacks coords)
+        self._points = np.vstack((xx.ravel(), yy.ravel())).T  # shape (npts, 2)
+
+        # interpolation cache
+        self._rbf_interpolator = None
+
+        # store other properties and call parent init
+        self._fill_value = fill_value
+        # normalize oversampling into a 2-tuple (rows, cols)
+        if hasattr(oversampling, '__len__'):
+            self.oversampling = tuple(oversampling)
+        else:
+            self.oversampling = (oversampling, oversampling)
+        # origin: if None, default to (0,0)
+        self._origin = (0.0, 0.0) if origin is None else tuple(origin)
+
+        super().__init__(data, flux=flux, x_0=x_0, y_0=y_0, origin=self._origin,
+                         oversampling=self.oversampling, fill_value=self._fill_value, **kwargs)
+
+    def _build_interpolator(self):
+        """Internal: build the RBFInterpolator and cache it."""
+        # if there is an existing interpolator, drop it
+        self._rbf_interpolator = RBFInterpolator(
+            self._points,
+            self._values,
+            neighbors=self.neighbours,
+            smoothing=self.smoothing,
+            kernel=self.kernel,
+            epsilon=self.epsilon,
+            degree=self.degree
+        )
 
     @property
     def interpolator(self):
-        """
-        Override the interpolator to use RBFInterpolator.
-        """
-        y, x = np.indices(self.data.shape)
-        points_x = x.ravel()
-        points_y = y.ravel()
-        points = np.vstack((points_x, points_y)).T
-        values = self.data.ravel()
+        """Return cached interpolator; build on first access."""
+        if self._rbf_interpolator is None:
+            self._build_interpolator()
+        return self._rbf_interpolator
 
-        # Create the RBFInterpolator interpolator
-        return RBFInterpolator(points, values, neighbors=self.neighbours, smoothing=self.smoothing, kernel=self.kernel, epsilon=self.epsilon, degree=self.degree)
-    
+    def invalidate_interpolator(self):
+        """Call if self.data or interpolation params are changed so the interpolator will be rebuilt."""
+        self._rbf_interpolator = None
+        # and if data changed, refresh points/values too:
+        self._values = self.data.ravel()
+
     def evaluate(self, x, y, flux, x_0, y_0):
         """
-        Calculate the value of the image model at the input coordinates
-        for the given model parameters.
-
-        Parameters
-        ----------
-        x, y : float or array_like
-            The x and y coordinates at which to evaluate the model.
-
-        flux : float
-            The total flux of the source, assuming the input image
-            was properly normalized.
-
-        x_0, y_0 : float
-            The x and y positions of the feature in the image in the
-            output coordinate grid on which the model is evaluated.
-
-        Returns
-        -------
-        result : `~numpy.ndarray`
-            The value of the model evaluated at the input coordinates.
+        Evaluate PSF model at coordinates (x, y), scaled by flux and shifted by (x_0, y_0).
+        Accepts scalars or array-like x,y (returned shape matches x/y shape).
         """
-        xi = self.oversampling[1] * (np.asarray(x, dtype=float) - x_0)
-        yi = self.oversampling[0] * (np.asarray(y, dtype=float) - y_0)
-        xi += self._origin[0] 
-        yi += self._origin[1]
+        # ensure numpy arrays and compute shifted coordinates in image pixel space
+        x_arr = np.asarray(x, dtype=float)
+        y_arr = np.asarray(y, dtype=float)
 
-        # Flatten xi and yi to 1D arrays
+        # apply oversampling and subtract center offsets
+        # note: self.oversampling is (row_os, col_os) = (y_os, x_os) in our normalisation
+        xi = self.oversampling[1] * (x_arr - x_0) + self._origin[0]
+        yi = self.oversampling[0] * (y_arr - y_0) + self._origin[1]
+
+        # flatten coords to shape (N,2) with ordering (x,y) to match self._points
         xi_flat = xi.ravel()
         yi_flat = yi.ravel()
+        coords = np.column_stack((xi_flat, yi_flat))  # shape (N,2)
 
-        # Stack the flattened arrays to form a 2D array of shape (n, 2)
-        coordinates = np.column_stack((xi_flat, yi_flat))
+        # Evaluate using cached interpolator (this is the costly call, but the interpolator is reused)
+        try:
+            evaluated_flat = self.interpolator(coords)
+        except Exception as e:
+            # rethrow with helpful context if interpolation fails
+            raise RuntimeError(f"RBF interpolation failed: {e!s}") from e
 
-        # Now pass this to the interpolator
-        evaluated_model_flat = self.interpolator(coordinates)
+        # reshape back to input shape, scale by flux
+        evaluated = evaluated_flat.reshape(xi.shape)
+        evaluated = flux * evaluated
 
-        evaluated_model = evaluated_model_flat.reshape(xi.shape)
-
-        evaluated_model = flux * evaluated_model
-        
-        if self.fill_value is not None:
-            # set pixels that are outside the input pixel grid to the
-            # fill_value to avoid extrapolation; these bounds match the
-            # RegularGridInterpolator bounds
+        # apply fill_value for points outside data bounds (avoid extrapolation artifacts)
+        if self._fill_value is not None:
             ny, nx = self.data.shape
             invalid = (xi < 0) | (xi > nx - 1) | (yi < 0) | (yi > ny - 1)
-            evaluated_model[invalid] = self.fill_value
+            if np.any(invalid):
+                evaluated = np.array(evaluated, copy=True)  # ensure mutable
+                evaluated[invalid] = self._fill_value
 
-        return evaluated_model
+        return evaluated
+
     
 class RectBivariateSplineImagePSF(ImagePSF):
     """
