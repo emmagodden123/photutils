@@ -67,8 +67,11 @@ class EPSFFitter:
             fitter = TRFLSQFitter()
         self.fitter = fitter
         self.fitter_has_fit_info = hasattr(self.fitter, 'fit_info')
-        self.fit_boxsize = as_pair('fit_boxsize', fit_boxsize,
-                                   lower_bound=(3, 0), check_odd=True)
+        if fit_boxsize is not None:
+            self.fit_boxsize = as_pair('fit_boxsize', fit_boxsize,
+                                    lower_bound=(3, 0), check_odd=True)
+        else:
+            self.fit_boxsize = fit_boxsize
 
         # remove any fitter keyword arguments that we need to set
         remove_kwargs = ['x', 'y', 'z', 'weights']
