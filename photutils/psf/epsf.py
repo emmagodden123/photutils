@@ -319,6 +319,33 @@ class EPSFBuilder:
         less than ``center_accuracy`` pixels between iterations. All
         stars must meet this condition for the loop to exit.
 
+    center_convergence_percentile : float, optional
+        The percentile of star center shifts used for center-based
+        convergence. The default of 100 reproduces the historical
+        behavior (maximum shift). Lower values, e.g. 90, reduce
+        sensitivity to a small number of outlier stars.
+
+    convergence_mode : {'center', 'model', 'both', 'either'}, optional
+        The convergence criterion used to end ePSF build iterations:
+
+        * ``'center'``: stop when the center-shift criterion is met.
+        * ``'model'``: stop when model/residual stabilization is met.
+        * ``'both'``: require both criteria to be met.
+        * ``'either'``: stop when either criterion is met.
+
+    epsf_change_tolerance : float, optional
+        Relative L2-norm change threshold for model-based convergence.
+        Used when ``convergence_mode`` includes model-based convergence.
+
+    residual_change_tolerance : float, optional
+        Relative change threshold of the robust residual metric between
+        iterations for model-based convergence.
+
+    convergence_stable_iters : int, optional
+        Number of consecutive iterations for which model-based
+        convergence thresholds must be satisfied before declaring
+        convergence.
+
     sigma_clip : `astropy.stats.SigmaClip` instance, optional
         A `~astropy.stats.SigmaClip` object that defines the sigma
         clipping parameters used to determine which pixels are ignored
@@ -354,6 +381,11 @@ class EPSFBuilder:
         threshold, and masking all but the largest source. Default is
         `True`.
 
+    edge_clip : int, optional
+        The number of oversampled pixels to clip (set to 0) around the edge of 
+        the ePSF model. Removes artifacts that can occur at the edges of the 
+        ePSF model. Default is 1.
+
 
     Notes
     -----
@@ -377,11 +409,17 @@ class EPSFBuilder:
                  norm_radius=5.5,
                  recentering_boxsize=(5, 5), 
                  center_accuracy=1.0e-3,
+                 center_convergence_percentile=100.0,
+                 convergence_mode='center',
+                 epsf_change_tolerance=1.0e-2,
+                 residual_change_tolerance=1.0e-2,
+                 convergence_stable_iters=2,
                  sigma_clip=SIGMA_CLIP, 
                  epsf_class=ImagePSF, 
                  gridpoint_estimation='polyfit', 
                  epsf_nonnegative=True, 
-                 mask_background_pixels=True):
+                 mask_background_pixels=True,
+                 edge_clip=1):
 
         if oversampling is None:
             msg = "'oversampling' must be specified"
@@ -429,6 +467,32 @@ class EPSFBuilder:
             msg = 'center_accuracy must be a positive number'
             raise ValueError(msg)
         self.center_accuracy_sq = center_accuracy**2
+        if not (0.0 < center_convergence_percentile <= 100.0):
+            msg = 'center_convergence_percentile must be in the range (0, 100]'
+            raise ValueError(msg)
+        self.center_convergence_percentile = float(center_convergence_percentile)
+
+        if convergence_mode not in ('center', 'model', 'both', 'either'):
+            msg = ("convergence_mode must be one of 'center', 'model', "
+                   "'both', or 'either'")
+            raise ValueError(msg)
+        self.convergence_mode = convergence_mode
+
+        if epsf_change_tolerance <= 0.0:
+            msg = 'epsf_change_tolerance must be a positive number'
+            raise ValueError(msg)
+        self.epsf_change_tolerance = float(epsf_change_tolerance)
+
+        if residual_change_tolerance <= 0.0:
+            msg = 'residual_change_tolerance must be a positive number'
+            raise ValueError(msg)
+        self.residual_change_tolerance = float(residual_change_tolerance)
+
+        convergence_stable_iters = int(convergence_stable_iters)
+        if convergence_stable_iters <= 0:
+            msg = 'convergence_stable_iters must be a positive integer'
+            raise ValueError(msg)
+        self.convergence_stable_iters = convergence_stable_iters
 
         maxiters = int(maxiters)
         if maxiters <= 0:
@@ -464,6 +528,7 @@ class EPSFBuilder:
         
         self.epsf_nonnegative = bool(epsf_nonnegative)
         self.mask_background_pixels = bool(mask_background_pixels)
+        self.edge_clip = int(edge_clip)
 
         # store each ePSF build iteration
         self._epsf = []
@@ -875,6 +940,53 @@ class EPSFBuilder:
 
         return epsf_data
 
+    @staticmethod
+    def _relative_l2_change(old_data, new_data):
+        """
+        Return the relative L2-norm change between two ePSF arrays.
+        """
+        mask = np.isfinite(old_data) & np.isfinite(new_data)
+        if not np.any(mask):
+            return np.inf
+
+        old_vals = old_data[mask]
+        new_vals = new_data[mask]
+        numerator = np.linalg.norm(new_vals - old_vals)
+        denominator = np.linalg.norm(old_vals)
+        if denominator == 0.0:
+            return 0.0 if numerator == 0.0 else np.inf
+        return numerator / denominator
+
+    @staticmethod
+    def _relative_change(old_value, new_value):
+        """
+        Return the relative absolute change between two scalar values.
+        """
+        if not (np.isfinite(old_value) and np.isfinite(new_value)):
+            return np.inf
+        scale = np.abs(old_value)
+        if scale == 0.0:
+            return 0.0 if new_value == 0.0 else np.inf
+        return np.abs(new_value - old_value) / scale
+
+    def _compute_residual_metric(self, stars, epsf):
+        """
+        Compute a robust scalar residual metric for model convergence.
+        """
+        star_metrics = []
+        for star in stars.all_good_stars:
+            x = star._xidx_centered
+            y = star._yidx_centered
+            model_values = epsf.evaluate(x=x, y=y, flux=1.0, x_0=0.0, y_0=0.0)
+            residual = np.abs(star._data_values_normalized - model_values)
+            residual = residual[np.isfinite(residual)]
+            if residual.size > 0:
+                star_metrics.append(np.nanmedian(residual))
+
+        if len(star_metrics) == 0:
+            return np.nan
+        return np.nanmedian(star_metrics)
+
     def _build_epsf_step(self, stars, epsf=None):
         """
         A single iteration of improving an ePSF.
@@ -1013,12 +1125,23 @@ class EPSFBuilder:
                                 oversampling=epsf.oversampling,
                                 origin=epsf.origin)
         
+        # Normalize the ePSF
         if self.normalise_epsf:
             normalised_data = self._normalise_epsf(epsf, box_size=self._norm_radius)
         else:
             normalised_data = recentered_data
 
-        return_epsf = self.epsf_class(data=recentered_data,
+        # Clip the edges of the ePSF data if required
+        if self.edge_clip and self.edge_clip > 0:
+            clipped_data = normalised_data.copy()
+            clipped_data[:self.edge_clip, :] = 0.0
+            clipped_data[-self.edge_clip:, :] = 0.0
+            clipped_data[:, :self.edge_clip] = 0.0
+            clipped_data[:, -self.edge_clip:] = 0.0
+        else:
+            clipped_data = normalised_data
+
+        return_epsf = self.epsf_class(data=clipped_data,
                                 oversampling=epsf.oversampling,
                                 origin=epsf.origin)
 
@@ -1064,21 +1187,18 @@ class EPSFBuilder:
             legacy_epsf = self.epsf_class(epsf.data, flux=epsf.flux,
                                            x_0=epsf.x_0, y_0=epsf.y_0, origin=epsf.origin,
                                            oversampling=epsf.oversampling)
-            
-        # Initial constrain centres and fluxes of linked stars
-        if isinstance(stars, LinkedEPSFStar):
-            stars.constrain_linked_centres()
-            stars.constrain_linked_fluxes()
-        elif isinstance(stars, EPSFStars):
-            for star in stars.all_stars:
-                if isinstance(star, LinkedEPSFStar):
-                    star.constrain_linked_centres()
-                    star.constrain_linked_fluxes()
 
-        while (iter_num < self.maxiters and not np.all(fit_failed)
-               and np.max(center_dist_sq) >= self.center_accuracy_sq):
+        # Initial constrain centres and fluxes of linked stars
+        stars.constrain_linked_centres()
+        stars.constrain_linked_fluxes()
+
+        model_converged_count = 0
+        previous_residual_metric = np.nan
+        converged = False
+        while iter_num < self.maxiters and not np.all(fit_failed):
 
             iter_num += 1
+            previous_epsf_data = None if legacy_epsf is None else legacy_epsf.data.copy()
 
             if iter_num == 1 and self.residual_smoothing_kernel is not None and legacy_epsf is None:
                 # Do not use residual smoothing in the first iteration UNLESS 
@@ -1107,15 +1227,9 @@ class EPSFBuilder:
 
                 stars = self.fitter(image_psf, stars)
 
-                # Constrain centres and fluxes
-                if isinstance(stars, LinkedEPSFStar):
-                    stars.constrain_linked_centres()
-                    stars.constrain_linked_fluxes()
-                elif isinstance(stars, EPSFStars):
-                    for star in stars.all_stars:
-                        if isinstance(star, LinkedEPSFStar):
-                            star.constrain_linked_centres()
-                            star.constrain_linked_fluxes()
+                # Constrain centres and fluxes of linked stars
+                stars.constrain_linked_centres()
+                stars.constrain_linked_fluxes()
 
             # find all stars where the fit failed
             fit_failed = np.array([star._fit_error_status > 0
@@ -1138,13 +1252,51 @@ class EPSFBuilder:
             center_dist_sq = np.sum(dx_dy * dx_dy, axis=1, dtype=np.float64)
             centers = stars.cutout_center_flat
 
+            if center_dist_sq.size > 0:
+                center_stat = np.nanpercentile(center_dist_sq,
+                                               self.center_convergence_percentile)
+                center_converged = center_stat < self.center_accuracy_sq
+            else:
+                center_converged = False
+
+            epsf_change = np.inf
+            if previous_epsf_data is not None:
+                epsf_change = self._relative_l2_change(previous_epsf_data,
+                                                       legacy_epsf.data)
+            residual_metric = self._compute_residual_metric(stars, legacy_epsf)
+            residual_change = self._relative_change(previous_residual_metric,
+                                                    residual_metric)
+            previous_residual_metric = residual_metric
+
+            model_converged_iter = (
+                epsf_change < self.epsf_change_tolerance
+                and residual_change < self.residual_change_tolerance
+            )
+            if model_converged_iter:
+                model_converged_count += 1
+            else:
+                model_converged_count = 0
+            model_converged = model_converged_count >= self.convergence_stable_iters
+
+            if self.convergence_mode == 'center':
+                converged = center_converged
+            elif self.convergence_mode == 'model':
+                converged = model_converged
+            elif self.convergence_mode == 'both':
+                converged = center_converged and model_converged
+            else:  # 'either'
+                converged = center_converged or model_converged
+
             self._epsf.append(legacy_epsf)
 
             if pbar is not None:
                 pbar.update()
 
+            if converged:
+                break
+
         if pbar is not None:
-            if iter_num < self.maxiters:
+            if converged:
                 pbar.write(f'EPSFBuilder converged after {iter_num} '
                            f'iterations (of {self.maxiters} maximum '
                            'iterations)')
