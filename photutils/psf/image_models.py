@@ -373,50 +373,31 @@ class RBFInterpolatorImagePSF(ImagePSF):
     def __init__(self, data, *, flux=1.0, x_0=0.0, y_0=0.0, origin=None,
                  oversampling=1, fill_value=0.0, neighbours=None, smoothing=0.0,
                  kernel='cubic', epsilon=None, degree=None, **kwargs):
-        # store RBF params
         self.neighbours = neighbours
         self.smoothing = smoothing
         self.kernel = kernel
         self.epsilon = epsilon
         self.degree = degree
-
-        # normalize/keep data; make sure it's an ndarray
-        self.data = np.asarray(data)  # keep a reference; if you mutate it, call invalidate_interpolator()
-        self._values = self.data.ravel()
-
-        # precompute grid points (x,y order consistent with evaluate coords)
-        ny, nx = self.data.shape
-        yy, xx = np.indices((ny, nx))
-        # Use (x,y) ordering for coordinates (matches how evaluate stacks coords)
-        self._points = np.vstack((xx.ravel(), yy.ravel())).T  # shape (npts, 2)
-
-        # interpolation cache
         self._rbf_interpolator = None
-
-        # store other properties and call parent init
-        self._fill_value = fill_value
-        # normalize oversampling into a 2-tuple (rows, cols)
-        if hasattr(oversampling, '__len__'):
-            self.oversampling = tuple(oversampling)
-        else:
-            self.oversampling = (oversampling, oversampling)
-        # origin: if None, default to (0,0)
-        self._origin = (0.0, 0.0) if origin is None else tuple(origin)
-
-        super().__init__(data, flux=flux, x_0=x_0, y_0=y_0, origin=self._origin,
-                         oversampling=self.oversampling, fill_value=self._fill_value, **kwargs)
+        super().__init__(data, flux=flux, x_0=x_0, y_0=y_0, origin=origin,
+                         oversampling=oversampling, fill_value=fill_value,
+                         **kwargs)
 
     def _build_interpolator(self):
         """Internal: build the RBFInterpolator and cache it."""
-        # if there is an existing interpolator, drop it
+        ny, nx = self.data.shape
+        yy, xx = np.indices((ny, nx))
+        points = np.column_stack((xx.ravel(), yy.ravel()))
+        values = self.data.ravel()
+
         self._rbf_interpolator = RBFInterpolator(
-            self._points,
-            self._values,
+            points,
+            values,
             neighbors=self.neighbours,
             smoothing=self.smoothing,
             kernel=self.kernel,
             epsilon=self.epsilon,
-            degree=self.degree
+            degree=self.degree,
         )
 
     @property
@@ -429,8 +410,6 @@ class RBFInterpolatorImagePSF(ImagePSF):
     def invalidate_interpolator(self):
         """Call if self.data or interpolation params are changed so the interpolator will be rebuilt."""
         self._rbf_interpolator = None
-        # and if data changed, refresh points/values too:
-        self._values = self.data.ravel()
 
     def evaluate(self, x, y, flux, x_0, y_0):
         """
@@ -441,34 +420,19 @@ class RBFInterpolatorImagePSF(ImagePSF):
         x_arr = np.asarray(x, dtype=float)
         y_arr = np.asarray(y, dtype=float)
 
-        # apply oversampling and subtract center offsets
-        # note: self.oversampling is (row_os, col_os) = (y_os, x_os) in our normalisation
         xi = self.oversampling[1] * (x_arr - x_0) + self._origin[0]
         yi = self.oversampling[0] * (y_arr - y_0) + self._origin[1]
 
-        # flatten coords to shape (N,2) with ordering (x,y) to match self._points
-        xi_flat = xi.ravel()
-        yi_flat = yi.ravel()
-        coords = np.column_stack((xi_flat, yi_flat))  # shape (N,2)
+        coords = np.column_stack((xi.ravel(), yi.ravel()))
+        evaluated_flat = self.interpolator(coords)
 
-        # Evaluate using cached interpolator (this is the costly call, but the interpolator is reused)
-        try:
-            evaluated_flat = self.interpolator(coords)
-        except Exception as e:
-            # rethrow with helpful context if interpolation fails
-            raise RuntimeError(f"RBF interpolation failed: {e!s}") from e
-
-        # reshape back to input shape, scale by flux
         evaluated = evaluated_flat.reshape(xi.shape)
         evaluated = flux * evaluated
 
-        # apply fill_value for points outside data bounds (avoid extrapolation artifacts)
-        if self._fill_value is not None:
+        if self.fill_value is not None:
             ny, nx = self.data.shape
             invalid = (xi < 0) | (xi > nx - 1) | (yi < 0) | (yi > ny - 1)
-            if np.any(invalid):
-                evaluated = np.array(evaluated, copy=True)  # ensure mutable
-                evaluated[invalid] = self._fill_value
+            evaluated = np.where(invalid, self.fill_value, evaluated)
 
         return evaluated
 

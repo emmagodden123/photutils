@@ -10,7 +10,7 @@ from astropy.utils.exceptions import AstropyDeprecationWarning
 from numpy.testing import assert_allclose, assert_equal
 
 from photutils.psf import (CircularGaussianPSF, EPSFModel, FittableImageModel,
-                           ImagePSF)
+                           ImagePSF, RBFInterpolatorImagePSF)
 
 
 @pytest.fixture(name='gmodel_old')
@@ -332,6 +332,33 @@ class TestFittableImageModel:
             with (pytest.raises(ValueError, match=match),
                   pytest.warns(AstropyDeprecationWarning)):
                 FittableImageModel(data, oversampling=oversampling)
+
+
+class TestRBFInterpolatorImagePSF:
+
+    def test_default_origin(self, gaussian_psf):
+        yy, xx = np.mgrid[-10:11, -10:11]
+        psf_data = gaussian_psf(xx, yy)
+        psf_data /= np.sum(psf_data)
+
+        model = RBFInterpolatorImagePSF(psf_data)
+
+        assert_equal(model.origin, (10.0, 10.0))
+        assert_allclose(model(0, 0), psf_data[10, 10])
+
+    def test_interpolator_cache_invalidate_data_shape_change(self):
+        data = np.ones((5, 5), dtype=float)
+        model = RBFInterpolatorImagePSF(data)
+
+        interp1 = model.interpolator
+        interp2 = model.interpolator
+        assert interp1 is interp2
+
+        model.data = np.ones((6, 6), dtype=float)
+        model.invalidate_interpolator()
+        interp3 = model.interpolator
+        assert interp3 is not interp1
+        assert_allclose(model(0, 0), 1.0)
 
 
 def test_epsfmodel_inputs():
