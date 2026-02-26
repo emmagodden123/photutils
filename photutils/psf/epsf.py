@@ -1187,6 +1187,20 @@ class EPSFBuilder:
             legacy_epsf = self.epsf_class(epsf.data, flux=epsf.flux,
                                            x_0=epsf.x_0, y_0=epsf.y_0, origin=epsf.origin,
                                            oversampling=epsf.oversampling)
+            
+        # Initial fit of the ePSF to the stars
+        if legacy_epsf is not None:
+            with warnings.catch_warnings():
+                message = '.*The fit may be unsuccessful;.*'
+                warnings.filterwarnings('ignore', message=message,
+                                        category=AstropyUserWarning)
+
+                image_psf = self.epsf_class(data=legacy_epsf.data,
+                                     origin=legacy_epsf.origin,
+                                     oversampling=legacy_epsf.oversampling,
+                                     fill_value=legacy_epsf.fill_value)
+
+                stars = self.fitter(image_psf, stars)
 
         # Initial constrain centres and fluxes of linked stars
         stars.constrain_linked_centres()
@@ -1227,9 +1241,9 @@ class EPSFBuilder:
 
                 stars = self.fitter(image_psf, stars)
 
-                # Constrain centres and fluxes of linked stars
-                stars.constrain_linked_centres()
-                stars.constrain_linked_fluxes()
+            # Constrain centres and fluxes of linked stars
+            stars.constrain_linked_centres()
+            stars.constrain_linked_fluxes()
 
             # find all stars where the fit failed
             fit_failed = np.array([star._fit_error_status > 0
