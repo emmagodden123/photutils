@@ -612,41 +612,19 @@ class EPSFBuilder:
         # from the normalized star at the location of the star in the
         # undersampled grid.
 
-        x = star._xidx_centered
-        y = star._yidx_centered
+        # Compute the residual image for the star.
+        residual_img = star.compute_residual_image(epsf)
 
-        star_vals = star._data_values_normalized
-        epsf_vals = epsf.evaluate(x=x, y=y, flux=1.0, x_0=0.0, y_0=0.0)
+        # Normalise the residuals by the star flux
+        residual_img /= star.flux
 
-        if self.mask_background_pixels:
+        # Set masked pixels to NaNs in the residual image using the star's mask
+        residual_img = np.where(star.mask, np.nan, residual_img)
 
-            # Obtain the mean, median and standard deviation of the star cutout
-            mean, median, std = sigma_clipped_stats(star.data, sigma=3.0, maxiters=5)
+        # Flatten the residual image to a 1D array
+        residual_img = residual_img.flatten()
 
-            # Get the threshold value for the star pixels
-            pix_threshold = median + 2.0 * std
-
-            # Mask the data which is below the threshold value
-            processed_image = np.where(star.data < pix_threshold, 0, star.data)
-
-            # Label the pixels above the threshold
-            labeled_array, num_features = label(processed_image > 0, structure=None)
-
-            # Get the label of the pixel with the maximum value
-            my_label = labeled_array[star.data == np.nanmax(star.data)][0]
-
-            # Make a mask of the pixels with the maximum label
-            star_mask = np.where(labeled_array == my_label, False, True).flatten()
-
-            # Mask the star pixels (make them nans) which are not part of the main source
-
-            star_vals_masked = np.where(star_mask, 0, star_vals)
-            stardata = (star_vals_masked - epsf_vals)
-
-        else:
-            stardata = (star_vals - epsf_vals)
-
-        # Convert pixel sample positions to the oversampled grid
+        # Convert pixel sample positions to the oversampled grid (1D arrays)
         x = epsf.oversampling[1] * star._xidx_centered
         y = epsf.oversampling[0] * star._yidx_centered
 
@@ -666,11 +644,13 @@ class EPSFBuilder:
         x_coord = x + epsf_xcenter - xidx
         y_coord = y + epsf_ycenter - yidx
 
+        # Set up empty results arrays (2D arrays with the same shape as the ePSF data array)
         resampled_img = np.full(epsf.data.shape, np.nan)
         img_weights = np.full(epsf.data.shape, 0.0)
         x_coords_img = np.full(epsf.data.shape, np.nan)
         y_coords_img = np.full(epsf.data.shape, np.nan)
 
+        # Mask out any pixel samples that fall outside the bounds of the ePSF data array
         mask = np.logical_and(
             np.logical_and(xidx >= 0, xidx < epsf.data.shape[1]),
             np.logical_and(yidx >= 0, yidx < epsf.data.shape[0]))
@@ -682,7 +662,7 @@ class EPSFBuilder:
         y_coord_ = y_coord[mask]
 
         # Fill the resampled image with the (masked) residuals
-        resampled_img[yidx_, xidx_] = stardata[mask]
+        resampled_img[yidx_, xidx_] = residual_img[mask]
 
         # Compute the weights for the resampling
         img_weights[yidx_, xidx_] = 1.0 - 1/np.sqrt(2) * np.sqrt(xdist_**2 + ydist_**2)
@@ -1146,6 +1126,62 @@ class EPSFBuilder:
                                 origin=epsf.origin)
 
         return return_epsf
+    
+    def _resample_epsf(self, epsf, oversampling):
+        """
+        Resample the input ePSF to the oversampling factor used in the build process.
+
+        Parameters
+        ----------
+        epsf : `ImagePSF` object
+            The input ePSF model.
+
+        oversampling : tuple of two ints
+            The oversampling factor used in the build process.
+
+        Returns
+        -------
+        resampled_epsf_data : 2D `~numpy.ndarray`
+            A 2D array containing the resampled ePSF data.
+        """
+
+        # Get the shape of the input ePSF data in image coordinates (i.e., not oversampled coordinates)
+        input_shape = epsf.data.shape / np.array(epsf.oversampling)
+
+        # Get the shape of the output ePSF data
+        output_shape = input_shape * np.array(oversampling)
+
+        # Make sure output shape is odd along both axes so that central pixel is well defined
+        output_shape = [(i + 1) if i % 2 == 0 else i for i in output_shape]
+
+        # Define central pixel in output data
+        output_center_yx = ((output_shape[0]-1) / 2, (output_shape[1]-1)/ 2)
+
+        # Make the x and y values at which to evaluate the input ePSF for the desired oversampling in image coordinates
+        y = (np.arange(output_shape[0]) - output_center_yx[0]) / oversampling[0]
+        x = (np.arange(output_shape[1]) - output_center_yx[1]) / oversampling[1]
+
+        # Generate a meshgrid of these x and y values
+        yy, xx = np.meshgrid(y, x)
+
+        # Evaluate the input ePSF at these x and y values to get the resampled ePSF data
+        resampled_epsf_data = epsf.evaluate(x=xx, y=yy, flux=1.0, x_0=0.0, y_0=0.0)
+
+        return resampled_epsf_data
+
+    def _get_init_epsf(self, epsf):
+        """
+        Obtain the initial ePSF model from the input ePSF model, noting that the input ePSF model may not have the same oversampling factor as the ePSF model used in the build process. The initial ePSF should be constructed by resampling the input ePSF to the oversampling factor and origin used in the build process."""
+        
+        if not isinstance(epsf, ImagePSF):
+            return None
+        
+        if epsf.oversampling == self.oversampling:
+            return epsf
+        
+        resampled_epsf_data = self._resample_epsf(epsf, self.oversampling)
+        
+        return self.epsf_class(data=resampled_epsf_data, oversampling=self.oversampling)
 
     def build_epsf(self, stars, *, init_epsf=None):
         """
