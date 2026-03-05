@@ -618,11 +618,9 @@ class EPSFBuilder:
         # Normalise the residuals by the star flux
         residual_img /= star.flux
 
-        # Set masked pixels to NaNs in the residual image using the star's mask
-        residual_img = np.where(star.mask, np.nan, residual_img)
-
-        # Flatten the residual image to a 1D array
-        residual_img = residual_img.flatten()
+        # Keep only unmasked residual samples so values match the
+        # unmasked coordinate vectors (star._xidx_centered/_yidx_centered).
+        residual_img = residual_img[~star.mask].ravel()
 
         # Convert pixel sample positions to the oversampled grid (1D arrays)
         x = epsf.oversampling[1] * star._xidx_centered
