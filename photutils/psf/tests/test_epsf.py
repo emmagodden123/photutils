@@ -18,7 +18,7 @@ from numpy.testing import assert_allclose
 from photutils.datasets import make_model_image
 from photutils.psf import CircularGaussianPRF, make_psf_model_image
 from photutils.psf.epsf import EPSFBuilder, EPSFFitter
-from photutils.psf.epsf_stars import EPSFStars, extract_stars
+from photutils.psf.epsf_stars import EPSFStar, EPSFStars, extract_stars
 
 
 @pytest.fixture
@@ -153,6 +153,31 @@ class TestEPSFBuild:
                 pytest.warns(AstropyUserWarning, match=match2)):
             epsf_builder(stars)
 
+    def test_resample_residual_masked_core(self):
+        data = np.ones((7, 7), dtype=float)
+        weights = np.ones_like(data)
+        weights[2:5, 2:5] = 0.0
+        star = EPSFStar(data, weights=weights, cutout_center=(3.0, 3.0))
+        stars = EPSFStars([star])
+
+        epsf_builder = EPSFBuilder(oversampling=2, maxiters=1,
+                                   progress_bar=False)
+        epsf = epsf_builder._create_initial_epsf(stars)
+
+        # Regression test: masked pixels must not cause a boolean-index
+        # mismatch in _resample_residual.
+        resampled_img, img_weights, x_coords_img, y_coords_img = (
+            epsf_builder._resample_residual(star, epsf)
+        )
+
+        assert resampled_img.shape == epsf.data.shape
+        assert img_weights.shape == epsf.data.shape
+        assert x_coords_img.shape == epsf.data.shape
+        assert y_coords_img.shape == epsf.data.shape
+
+        cy, cx = np.array(epsf.data.shape) // 2
+        assert np.isnan(resampled_img[cy, cx])
+
     def test_epsf_build_invalid_fitter(self):
         """
         Test that the input fitter is an EPSFFitter instance.
@@ -195,4 +220,3 @@ def test_epsfbuilder_inputs():
 
     # valid inputs
     EPSFBuilder(sigma_clip=SigmaClip(sigma=2.5, cenfunc='mean', maxiters=2))
-
