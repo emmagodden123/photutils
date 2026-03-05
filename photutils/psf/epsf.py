@@ -1205,7 +1205,7 @@ class EPSFBuilder:
         """
         iter_num = 0
         fit_failed = np.zeros(stars.n_stars, dtype=bool)
-        epsf = init_epsf
+        epsf = self._get_init_epsf(init_epsf)
         center_dist_sq = self.center_accuracy_sq + 1.0
         centers = stars.cutout_center_flat
 
