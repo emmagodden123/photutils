@@ -1143,24 +1143,26 @@ class EPSFBuilder:
             A 2D array containing the resampled ePSF data.
         """
 
-        # Get the shape of the input ePSF data in image coordinates (i.e., not oversampled coordinates)
-        input_shape = epsf.data.shape / np.array(epsf.oversampling)
+        # Convert from oversampled-array dimensions to the equivalent
+        # image-grid dimensions using grid endpoints, then convert to
+        # the requested oversampling.
+        input_shape = ((np.asarray(epsf.data.shape, dtype=float) - 1.0)
+                       / np.asarray(epsf.oversampling, dtype=float))
+        output_shape = np.rint(input_shape * np.asarray(oversampling)
+                               + 1.0).astype(int)
 
-        # Get the shape of the output ePSF data
-        output_shape = input_shape * np.array(oversampling)
+        # Ensure odd output dimensions so the central pixel is well defined.
+        output_shape = np.where(output_shape % 2 == 0, output_shape + 1,
+                                output_shape)
 
-        # Make sure output shape is odd along both axes so that central pixel is well defined
-        output_shape = [(i + 1) if i % 2 == 0 else i for i in output_shape]
+        output_center_yx = (output_shape - 1.0) / 2.0
 
-        # Define central pixel in output data
-        output_center_yx = ((output_shape[0]-1) / 2, (output_shape[1]-1)/ 2)
-
-        # Make the x and y values at which to evaluate the input ePSF for the desired oversampling in image coordinates
-        y = (np.arange(output_shape[0]) - output_center_yx[0]) / oversampling[0]
-        x = (np.arange(output_shape[1]) - output_center_yx[1]) / oversampling[1]
-
-        # Generate a meshgrid of these x and y values
-        yy, xx = np.meshgrid(y, x)
+        # Evaluate on the requested image-coordinate grid.
+        y = (np.arange(output_shape[0], dtype=float) - output_center_yx[0])
+        y /= oversampling[0]
+        x = (np.arange(output_shape[1], dtype=float) - output_center_yx[1])
+        x /= oversampling[1]
+        yy, xx = np.meshgrid(y, x, indexing='ij')
 
         # Evaluate the input ePSF at these x and y values to get the resampled ePSF data
         resampled_epsf_data = epsf.evaluate(x=xx, y=yy, flux=1.0, x_0=0.0, y_0=0.0)
@@ -1174,7 +1176,8 @@ class EPSFBuilder:
         if not isinstance(epsf, ImagePSF):
             return None
         
-        if epsf.oversampling == self.oversampling:
+        if np.array_equal(np.asarray(epsf.oversampling),
+                          np.asarray(self.oversampling)):
             return epsf
         
         resampled_epsf_data = self._resample_epsf(epsf, self.oversampling)

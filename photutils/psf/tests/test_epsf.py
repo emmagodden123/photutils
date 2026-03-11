@@ -19,6 +19,7 @@ from photutils.datasets import make_model_image
 from photutils.psf import CircularGaussianPRF, make_psf_model_image
 from photutils.psf.epsf import EPSFBuilder, EPSFFitter
 from photutils.psf.epsf_stars import EPSFStar, EPSFStars, extract_stars
+from photutils.psf.image_models import ImagePSF
 
 
 @pytest.fixture
@@ -220,3 +221,33 @@ def test_epsfbuilder_inputs():
 
     # valid inputs
     EPSFBuilder(sigma_clip=SigmaClip(sigma=2.5, cenfunc='mean', maxiters=2))
+
+
+def test_resample_epsf_anisotropic_grid():
+    y_oversamp_in, x_oversamp_in = (4, 2)
+    y_size_in, x_size_in = (33, 21)  # (native - 1) * oversampling + 1
+
+    y0 = (y_size_in - 1) / 2.0
+    x0 = (x_size_in - 1) / 2.0
+    yy, xx = np.indices((y_size_in, x_size_in), dtype=float)
+    x_img = (xx - x0) / x_oversamp_in
+    y_img = (yy - y0) / y_oversamp_in
+
+    # A linear surface makes coordinate-mapping errors easy to detect.
+    data = x_img + (2.0 * y_img)
+    input_epsf = ImagePSF(data=data, oversampling=(y_oversamp_in, x_oversamp_in))
+
+    builder = EPSFBuilder(oversampling=(2, 3), maxiters=1, progress_bar=False)
+    resampled = builder._resample_epsf(input_epsf, builder.oversampling)
+
+    expected_shape = (17, 31)
+    assert resampled.shape == expected_shape
+
+    y0_out = (expected_shape[0] - 1) / 2.0
+    x0_out = (expected_shape[1] - 1) / 2.0
+    yy_out, xx_out = np.indices(expected_shape, dtype=float)
+    x_img_out = (xx_out - x0_out) / builder.oversampling[1]
+    y_img_out = (yy_out - y0_out) / builder.oversampling[0]
+    expected = x_img_out + (2.0 * y_img_out)
+
+    assert_allclose(resampled, expected, atol=1e-8)
