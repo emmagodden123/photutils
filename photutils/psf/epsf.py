@@ -1064,7 +1064,7 @@ class EPSFBuilder:
         mask = ~np.isfinite(residuals)
         if np.any(mask):
             residuals = _interpolate_missing_data(residuals, mask,
-                                                  method='cubic')
+                                                  method='nearest')
 
             # fill any remaining nans (outer points) with zeros
             residuals[~np.isfinite(residuals)] = 0.0
