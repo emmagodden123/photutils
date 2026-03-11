@@ -1042,15 +1042,12 @@ class EPSFBuilder:
                         z_samples = residuals[valid_mask, i, j]
                         
                         num_samples = len(z_samples)
-                        if num_samples == 1:
-                            fitted_matrix[i, j] = z_samples[0]  # Use single value directly
-                        elif num_samples > 1 and num_samples <= 5:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-                        elif num_samples > 5:
+                        if num_samples < 3:
+                            continue
+                        elif num_samples <= 10:
+                            # Not enough samples for a quadratic fit, so just take the median of the valid samples
+                            fitted_matrix[i, j] = np.nanmedian(z_samples)
+                        elif num_samples > 10:
                             A = np.column_stack( (
                                 np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2
                             ))
