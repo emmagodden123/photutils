@@ -47,20 +47,25 @@ class PriorLogTRFLSQFitter:
         data_flat = data.ravel()
         px_flat = px.ravel()
         py_flat = py.ravel()
-        m = data_flat.size
 
         # --- interpret weights -> sigma_pix ---
         if weights is None:
-            sigma_pix = np.ones_like(data_flat)
+            sigma_pix = np.ones_like(data_flat, dtype=float)
+            valid_data = np.ones_like(data_flat, dtype=bool)
         else:
             w = np.asarray(weights).ravel()
             if w.size != data_flat.size:
                 w = np.broadcast_to(w, data.shape).ravel()
+            valid_data = np.isfinite(w) & (w > 0.0)
+            sigma_pix = np.full(data_flat.shape, np.inf, dtype=float)
+
+            if np.any(valid_data):
+                w_valid = w[valid_data]
             # Heuristic: if any w > 1 treat as 1/sigma, else treat as sigma
-            if np.any(w > 1.0):
-                sigma_pix = np.clip(1.0 / w, 1e-12, None)
-            else:
-                sigma_pix = np.clip(w, 1e-12, None)
+                if np.any(w_valid > 1.0):
+                    sigma_pix[valid_data] = np.clip(1.0 / w_valid, 1e-12, None)
+                else:
+                    sigma_pix[valid_data] = np.clip(w_valid, 1e-12, None)
 
         # --- initial model parameters (flux, x0, y0, ...) ---
         try:
@@ -129,7 +134,10 @@ class PriorLogTRFLSQFitter:
         # --- residuals (data + prior) in internal space ---
         def residuals_internal(p_internal):
             model_vals = model_prediction_internal(p_internal)
-            res_data = (model_vals - data_flat) / sigma_pix
+            res_data = np.zeros_like(data_flat, dtype=float)
+            res_data[valid_data] = ((model_vals[valid_data]
+                                     - data_flat[valid_data])
+                                    / sigma_pix[valid_data])
             res_prior = (p_internal - prior_mean_internal) / prior_sigma_internal
             return np.concatenate([res_data, res_prior])
 
@@ -183,8 +191,9 @@ class PriorLogTRFLSQFitter:
 
         # --- compute covariance in internal space ---
         final_model_vals = model_prediction_internal(fitted_internal)
-        resid_data = final_model_vals - data_flat
-        dof = max(1, m - n)
+        resid_data = final_model_vals[valid_data] - data_flat[valid_data]
+        m_valid = resid_data.size
+        dof = max(1, m_valid - n)
         sigma2 = (resid_data**2).sum() / float(dof)
 
         JTJ = J_full.T @ J_full
@@ -214,7 +223,8 @@ class PriorLogTRFLSQFitter:
         self.fit_info['fitted_flux'] = fitted_flux
 
         # compute qfit (photutils definition: sum|res| / fitted_flux)
-        qfit = np.sum(np.abs(data_flat - final_model_vals)) / max(1e-12, fitted_flux)
+        qfit = (np.sum(np.abs(data_flat[valid_data] - final_model_vals[valid_data]))
+                / max(1e-12, fitted_flux))
         self.fit_info['qfit'] = qfit
 
         # attach to model if possible
@@ -234,6 +244,7 @@ class PriorLogTRFLSQFitter:
             approx_prior = 1.0 / np.array([max(1e-12, prior_sigma_internal[0])] + \
                                           [max(1e-12, prior_sigma_internal[i]) for i in range(1, n)])
             print("approx prior row magnitudes (1/prior_sigma_internal):", approx_prior)
+            print("n_masked_data:", np.count_nonzero(~valid_data))
             print("cond(J^T J) =", cond)
             print("param_uncert_flux:", param_uncert_flux)
             print("qfit:", qfit)
