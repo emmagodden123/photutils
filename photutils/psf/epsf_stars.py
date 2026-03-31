@@ -61,10 +61,15 @@ class EPSFStar:
 
     id_label : int, str, or `None`, optional
         An optional identification number or label for the star.
+
+    frame_id : int, str, or `None`, optional
+        An optional identifier for the image/exposure/frame from which
+        the star cutout was extracted.
     """
 
     def __init__(self, data, *, weights=None, cutout_center=None,
-                 origin=(0, 0), wcs_large=None, id_label=None):
+                 origin=(0, 0), wcs_large=None, id_label=None,
+                 frame_id=None):
 
         self._data = np.asanyarray(data)
         self.shape = self._data.shape
@@ -90,6 +95,7 @@ class EPSFStar:
         self.origin = np.asarray(origin)
         self.wcs_large = wcs_large
         self.id_label = id_label
+        self.frame_id = frame_id
 
         self.flux = self.estimate_flux()
 
@@ -569,6 +575,43 @@ class LinkedEPSFStar(EPSFStars):
             center = star.wcs_large.world_to_pixel_values(mean_lon, mean_lat)
             star.cutout_center = np.array(center) - star.origin
 
+    def get_mean_radec(self):
+
+        idx = np.logical_not(self._excluded_from_fit).nonzero()[0]
+        if idx.shape == (0,):  # pylint: disable=no-member
+            warnings.warn('Cannot constrain centers of linked stars because '
+                          'all the stars have been excluded during the ePSF '
+                          'build process.', AstropyUserWarning)
+            return
+
+        good_stars = [self._data[i]
+                      for i in idx]  # pylint: disable=not-an-iterable
+
+        coords = []
+        for star in good_stars:
+            wcs = star.wcs_large
+            xposition = star.center[0]
+            yposition = star.center[1]
+            coords.append(wcs.pixel_to_world_values(xposition, yposition))
+
+        # compute mean cartesian coordinates
+        lon, lat = np.transpose(coords)
+        lon *= np.pi / 180.0
+        lat *= np.pi / 180.0
+        x_mean = np.mean(np.cos(lat) * np.cos(lon))
+        y_mean = np.mean(np.cos(lat) * np.sin(lon))
+        z_mean = np.mean(np.sin(lat))
+
+        # convert mean cartesian coordinates back to spherical
+        hypot = np.hypot(x_mean, y_mean)
+        mean_lon = np.arctan2(y_mean, x_mean)
+        mean_lat = np.arctan2(z_mean, hypot)
+        mean_lon *= 180.0 / np.pi
+        mean_lat *= 180.0 / np.pi
+
+        return mean_lon, mean_lat
+
+
     def constrain_fluxes(self):
         """
         Constrain the fluxes of linked `EPSFStar` objects (i.e., the
@@ -602,6 +645,27 @@ class LinkedEPSFStar(EPSFStars):
         # set the flux of each star to the mean flux
         for star in good_stars:
             star.flux = mean_flux
+
+    def get_mean_flux(self):
+
+        idx = np.logical_not(self._excluded_from_fit).nonzero()[0]
+        if idx.shape == (0,):  # pylint: disable=no-member
+            warnings.warn('Cannot get mean flux of linked stars because '
+                          'all the stars have been excluded during the ePSF '
+                          'build process.', AstropyUserWarning)
+            return
+
+        good_stars = [self._data[i]
+                      for i in idx]  # pylint: disable=not-an-iterable
+
+        fluxes = []
+        for star in good_stars:
+            fluxes.append(star.flux)
+
+        # compute mean flux
+        mean_flux = np.mean(fluxes)
+
+        return mean_flux
 
 
 def extract_stars(data, catalogs, *, size=(11, 11)):

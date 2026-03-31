@@ -17,9 +17,10 @@ from numpy.testing import assert_allclose
 
 from photutils.datasets import make_model_image
 from photutils.psf import CircularGaussianPRF, make_psf_model_image
-from photutils.psf.epsf import EPSFBuilder, EPSFFitter
+from photutils.psf.epsf import EPSFBuilder, EPSFFitter, PPEMap
 from photutils.psf.epsf_stars import EPSFStar, EPSFStars, extract_stars
 from photutils.psf.image_models import ImagePSF
+from photutils.utils._optional_deps import HAS_MATPLOTLIB
 
 
 @pytest.fixture
@@ -208,10 +209,42 @@ def test_epsfbuilder_inputs():
     match = 'oversampling must be > 0'
     with pytest.raises(ValueError, match=match):
         EPSFBuilder(oversampling=[-1, 4])
+    match = 'flux_ppe_damping must be in the range \\[0, 1\\]'
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(flux_ppe_damping=1.5)
+    match = 'flux_ppe_update_every must be a positive integer'
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(flux_ppe_update_every=0)
+    match = 'residual_star_rms_clip must be positive or None'
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(residual_star_rms_clip=0)
+    match = 'residual_outlier_clip must be positive or None'
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(residual_outlier_clip=-1)
+    match = 'residual_min_valid_samples must be a positive integer'
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(residual_min_valid_samples=0)
+    match = r'residual_update_fraction must be in the range \(0, 1\]'
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(residual_update_fraction=0.0)
+    match = 'residual_despike_threshold must be a positive number'
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(residual_despike_threshold=0.0)
+    match = 'residual_despike_passes must be a positive integer'
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(residual_despike_passes=0)
+    match = "residual_despike_mode must be 'threshold' or 'strict'"
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(residual_despike_mode='invalid')
 
     # valid inputs
     EPSFBuilder(oversampling=6)
     EPSFBuilder(oversampling=[4, 6])
+    EPSFBuilder(flux_ppe_damping=0.25, flux_ppe_update_every=3)
+    EPSFBuilder(residual_star_rms_clip=None, residual_outlier_clip=3.0,
+                residual_min_valid_samples=3, residual_update_fraction=0.25,
+                residual_despike_boxsize=5, residual_despike_passes=3,
+                residual_despike_mode='strict')
 
     # invalid inputs
     for sigma_clip in [None, [], 'a']:
@@ -251,3 +284,53 @@ def test_resample_epsf_anisotropic_grid():
     expected = x_img_out + (2.0 * y_img_out)
 
     assert_allclose(resampled, expected, atol=1e-8)
+
+
+def test_apply_ppe_corrections_policy():
+    star = EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                    origin=(10, 20))
+    stars = EPSFStars([star])
+    builder = EPSFBuilder(oversampling=2, maxiters=1, progress_bar=False,
+                          flux_ppe_damping=0.5, flux_ppe_update_every=2)
+
+    ppemap = PPEMap((2, 2),
+                    np.full((2, 2), 0.2),
+                    np.full((2, 2), 0.25),
+                    np.full((2, 2), -0.5))
+
+    corrected_iter1 = builder._apply_ppe_corrections(stars, ppemap,
+                                                     iteration=1)
+    assert_allclose(corrected_iter1[0].flux, star.flux)
+    assert_allclose(corrected_iter1[0].center, (11.75, 22.5))
+
+    corrected_iter2 = builder._apply_ppe_corrections(stars, ppemap,
+                                                     iteration=2)
+    assert_allclose(corrected_iter2[0].flux, star.flux / 1.2 * 0.5
+                    + star.flux * 0.5)
+    assert_allclose(corrected_iter2[0].center, (11.75, 22.5))
+
+    corrected_final = builder._apply_ppe_corrections(stars, ppemap,
+                                                     final=True)
+    assert_allclose(corrected_final[0].flux, star.flux / 1.2)
+    assert_allclose(corrected_final[0].center, (11.75, 22.5))
+
+
+@pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib is required')
+def test_ppemap_plot_maps():
+    import matplotlib.pyplot as plt
+
+    ppemap = PPEMap((2, 3),
+                    np.array([[0.1, 0.2, 0.3],
+                              [0.4, 0.5, 0.6]]),
+                    np.array([[0.0, 0.1, 0.0],
+                              [-0.1, 0.0, 0.1]]),
+                    np.array([[0.05, 0.0, -0.05],
+                              [0.1, 0.0, -0.1]]))
+
+    fig = ppemap.plot_maps()
+
+    assert len(fig.axes) == 6
+    assert [ax.get_title() for ax in fig.axes[:3]] == ['Flux PPE', 'X PPE',
+                                                        'Y PPE']
+
+    plt.close(fig)

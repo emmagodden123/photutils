@@ -14,7 +14,7 @@ from astropy.nddata.utils import NoOverlapError, PartialOverlapError
 from astropy.convolution import Gaussian2DKernel
 from astropy.stats import SigmaClip, sigma_clipped_stats
 from astropy.utils.exceptions import AstropyUserWarning
-from scipy.ndimage import convolve, label
+from scipy.ndimage import convolve, label, median_filter
 
 from photutils.centroids import centroid_com
 from photutils.psf.epsf_stars import EPSFStar, EPSFStars, LinkedEPSFStar
@@ -27,7 +27,7 @@ from photutils.utils._round import py2intround
 from photutils.utils._stats import nanmedian
 from photutils.utils.cutouts import _overlap_slices as overlap_slices
 
-__all__ = ['EPSFBuilder', 'EPSFFitter']
+__all__ = ['EPSFBuilder', 'EPSFFitter', 'PPEMap']
 
 
 SIGMA_CLIP = SigmaClipSentinelDefault(sigma=3.0, maxiters=10)
@@ -386,6 +386,77 @@ class EPSFBuilder:
         the ePSF model. Removes artifacts that can occur at the edges of the 
         ePSF model. Default is 1.
 
+    apply_position_ppe : bool, optional
+        Whether to apply the position PPE correction inside the build
+        iterations. The default is `True`.
+
+    apply_flux_ppe : bool, optional
+        Whether to apply the flux PPE correction inside the build
+        iterations. The default is `True`.
+
+    flux_ppe_damping : float, optional
+        Multiplicative damping factor for the in-loop flux PPE
+        correction. A value of 1 applies the full correction, while 0
+        disables the in-loop flux update without disabling the final
+        flux PPE application. The default is 0.5.
+
+    flux_ppe_update_every : int, optional
+        Apply the in-loop flux PPE correction every N iterations. The
+        default is 2.
+
+    apply_final_flux_ppe : bool, optional
+        Whether to apply a final full-strength flux PPE correction to
+        the returned fitted stars after the build loop converges. The
+        default is `True`.
+
+    plot_ppe_diagnostics : bool, optional
+        Whether to show diagnostic PPE-map plots after the initial fit
+        and after each iteration. The default is `True`.
+
+    residual_star_rms_clip : float or `None`, optional
+        Sigma threshold for rejecting entire stars from the residual
+        stack based on their normalized residual RMS. If `None`, then no
+        whole-star residual clipping is performed. The default is 4.0.
+
+    residual_outlier_clip : float or `None`, optional
+        Sigma threshold for rejecting outlying residual samples within
+        each oversampled grid cell using a MAD-based clip. If `None`,
+        then no per-gridpoint residual clipping is performed. The
+        default is 4.0.
+
+    residual_min_valid_samples : int, optional
+        Minimum number of valid residual samples required to update an
+        oversampled grid cell. Cells with fewer samples are left
+        unchanged in that iteration. The default is 5.
+
+    residual_update_fraction : float, optional
+        Fraction of the estimated residual image to add back into the
+        ePSF each iteration. Values below 1 damp the update and reduce
+        sensitivity to noisy residual estimates. The default is 0.5.
+
+    residual_despike : bool, optional
+        Whether to apply a local despiking step to the stacked residual
+        image before smoothing and updating the ePSF. The default is
+        `True`.
+
+    residual_despike_threshold : float, optional
+        Sigma threshold, based on the local MAD, used to identify hot
+        residual cells for despiking. The default is 4.0.
+
+    residual_despike_boxsize : int or tuple of int, optional
+        The size of the neighborhood used to identify and replace hot
+        residual cells. The default is 3.
+
+    residual_despike_passes : int, optional
+        The number of local despiking passes to apply to the stacked
+        residual image. The default is 2.
+
+    residual_despike_mode : {'threshold', 'strict'}, optional
+        The residual despiking mode. ``'threshold'`` replaces only
+        detected hot cells, while ``'strict'`` replaces every cell with
+        the median of its local neighborhood. The default is
+        ``'threshold'``.
+
 
     Notes
     -----
@@ -406,7 +477,7 @@ class EPSFBuilder:
                  maxiters=10,
                  progress_bar=True, 
                  normalise_epsf=True,
-                 norm_radius=5.5,
+                 norm_radius=5,
                  recentering_boxsize=(5, 5), 
                  center_accuracy=1.0e-3,
                  center_convergence_percentile=100.0,
@@ -419,7 +490,22 @@ class EPSFBuilder:
                  gridpoint_estimation='polyfit', 
                  epsf_nonnegative=True, 
                  mask_background_pixels=True,
-                 edge_clip=1):
+                 edge_clip=1,
+                 apply_position_ppe=True,
+                 apply_flux_ppe=True,
+                 flux_ppe_damping=0.5,
+                 flux_ppe_update_every=1,
+                 apply_final_flux_ppe=True,
+                 plot_ppe_diagnostics=True,
+                 residual_star_rms_clip=3.0,
+                 residual_outlier_clip=3.0,
+                 residual_min_valid_samples=5,
+                 residual_update_fraction=1,
+                 residual_despike=True,
+                 residual_despike_threshold=3.0,
+                 residual_despike_boxsize=3,
+                 residual_despike_passes=2,
+                 residual_despike_mode='threshold'):
 
         if oversampling is None:
             msg = "'oversampling' must be specified"
@@ -530,6 +616,65 @@ class EPSFBuilder:
         self.mask_background_pixels = bool(mask_background_pixels)
         self.edge_clip = int(edge_clip)
 
+        self.apply_position_ppe = bool(apply_position_ppe)
+        self.apply_flux_ppe = bool(apply_flux_ppe)
+
+        if not (0.0 <= flux_ppe_damping <= 1.0):
+            msg = 'flux_ppe_damping must be in the range [0, 1]'
+            raise ValueError(msg)
+        self.flux_ppe_damping = float(flux_ppe_damping)
+
+        flux_ppe_update_every = int(flux_ppe_update_every)
+        if flux_ppe_update_every <= 0:
+            msg = 'flux_ppe_update_every must be a positive integer'
+            raise ValueError(msg)
+        self.flux_ppe_update_every = flux_ppe_update_every
+        self.apply_final_flux_ppe = bool(apply_final_flux_ppe)
+        self.plot_ppe_diagnostics = bool(plot_ppe_diagnostics)
+
+        if residual_star_rms_clip is not None and residual_star_rms_clip <= 0:
+            msg = 'residual_star_rms_clip must be positive or None'
+            raise ValueError(msg)
+        self.residual_star_rms_clip = residual_star_rms_clip
+
+        if residual_outlier_clip is not None and residual_outlier_clip <= 0:
+            msg = 'residual_outlier_clip must be positive or None'
+            raise ValueError(msg)
+        self.residual_outlier_clip = residual_outlier_clip
+
+        residual_min_valid_samples = int(residual_min_valid_samples)
+        if residual_min_valid_samples <= 0:
+            msg = 'residual_min_valid_samples must be a positive integer'
+            raise ValueError(msg)
+        self.residual_min_valid_samples = residual_min_valid_samples
+
+        if not (0.0 < residual_update_fraction <= 1.0):
+            msg = 'residual_update_fraction must be in the range (0, 1]'
+            raise ValueError(msg)
+        self.residual_update_fraction = float(residual_update_fraction)
+
+        self.residual_despike = bool(residual_despike)
+
+        if residual_despike_threshold <= 0.0:
+            msg = 'residual_despike_threshold must be a positive number'
+            raise ValueError(msg)
+        self.residual_despike_threshold = float(residual_despike_threshold)
+
+        self.residual_despike_boxsize = as_pair(
+            'residual_despike_boxsize', residual_despike_boxsize,
+            lower_bound=(3, 3), check_odd=True)
+
+        residual_despike_passes = int(residual_despike_passes)
+        if residual_despike_passes <= 0:
+            msg = 'residual_despike_passes must be a positive integer'
+            raise ValueError(msg)
+        self.residual_despike_passes = residual_despike_passes
+
+        if residual_despike_mode not in ('threshold', 'strict'):
+            msg = "residual_despike_mode must be 'threshold' or 'strict'"
+            raise ValueError(msg)
+        self.residual_despike_mode = residual_despike_mode
+
         # store each ePSF build iteration
         self._epsf = []
 
@@ -558,7 +703,6 @@ class EPSFBuilder:
         epsf : `_LegacyEPSFModel`
             The initial ePSF model.
         """
-        norm_radius = self._norm_radius
         oversampling = self.oversampling
         shape = self.shape
 
@@ -634,13 +778,13 @@ class EPSFBuilder:
         xidx = py2intround(x + epsf_xcenter)
         yidx = py2intround(y + epsf_ycenter)
 
-        # Calculate the distance between the pixel sample position and the index it belongs to in the oversampled grid. Normalise by the maximum distance a pixel can be from the index it belongs to.
-        xdist = np.abs(x + epsf_xcenter - xidx) / 0.5
-        ydist = np.abs(y + epsf_ycenter - yidx) / 0.5
-
         # Calculate the coordinates of the pixel relative to the index it belongs to in the oversampled grid
         x_coord = x + epsf_xcenter - xidx
         y_coord = y + epsf_ycenter - yidx
+
+        # Calculate the distance between the pixel sample position and the index it belongs to in the oversampled grid. Normalise by the maximum distance a pixel can be from the index it belongs to.
+        xdist = np.abs(x_coord) / 0.5
+        ydist = np.abs(y_coord) / 0.5
 
         # Set up empty results arrays (2D arrays with the same shape as the ePSF data array)
         resampled_img = np.full(epsf.data.shape, np.nan)
@@ -887,11 +1031,11 @@ class EPSFBuilder:
         # Get the box size for normalizing the ePSF
         if box_size is None:
             box_size = epsf.data.shape / self.oversampling
-        else:
-            # Convert box size to integer
-            box_size = np.asarray(box_size, dtype=int)
-            box_size = as_pair('box_size', box_size,
-                               lower_bound=(3, 3), check_odd=False)
+
+        # Convert box size to integer
+        box_size = np.asarray(box_size, dtype=int)
+        box_size = as_pair('box_size', box_size,
+                            lower_bound=(3, 3), check_odd=False)
             
         # Check that box size is >= 3
         if box_size[0] < 3 or box_size[1] < 3:
@@ -914,6 +1058,8 @@ class EPSFBuilder:
         if total > 0.0:
             epsf_data = epsf.data / total
         else:
+            # Warning: if the total is zero or negative, we cannot normalize, so we return the original data and issue a warning.
+            warnings.warn('Cannot normalize ePSF because total is non-positive. Returning original ePSF data.', AstropyUserWarning)
             epsf_data = epsf.data
 
         return epsf_data
@@ -956,7 +1102,7 @@ class EPSFBuilder:
             x = star._xidx_centered
             y = star._yidx_centered
             model_values = epsf.evaluate(x=x, y=y, flux=1.0, x_0=0.0, y_0=0.0)
-            residual = np.abs(star._data_values_normalized - model_values)
+            residual = np.abs((star._data_values / star.flux) - model_values)
             residual = residual[np.isfinite(residual)]
             if residual.size > 0:
                 star_metrics.append(np.nanmedian(residual))
@@ -965,7 +1111,267 @@ class EPSFBuilder:
             return np.nan
         return np.nanmedian(star_metrics)
 
-    def _build_epsf_step(self, stars, epsf=None):
+    @staticmethod
+    def _mad_std(values):
+        """
+        Return a robust standard-deviation estimate from the MAD.
+        """
+        values = np.asanyarray(values, dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return np.nan
+        median = np.nanmedian(values)
+        mad = np.nanmedian(np.abs(values - median))
+        return 1.4826 * mad
+
+    def _select_residual_stars(self, stars, epsf):
+        """
+        Select stars for the residual stack using a robust RMS clip.
+        """
+        good_stars = stars.all_good_stars
+        if len(good_stars) == 0 or self.residual_star_rms_clip is None:
+            return good_stars
+
+        rms_values = []
+        for star in good_stars:
+            residual = star.compute_residual_image(epsf) / star.flux
+            residual = residual[~star.mask]
+            residual = residual[np.isfinite(residual)]
+            if residual.size == 0:
+                rms_values.append(np.nan)
+            else:
+                rms_values.append(np.sqrt(np.nanmean(residual**2)))
+
+        rms_values = np.asarray(rms_values, dtype=float)
+        valid = np.isfinite(rms_values)
+        if np.count_nonzero(valid) < 3:
+            return good_stars
+
+        center = np.nanmedian(rms_values[valid])
+        scale = self._mad_std(rms_values[valid])
+        if not np.isfinite(scale) or scale == 0.0:
+            return good_stars
+
+        threshold = center + self.residual_star_rms_clip * scale
+        selected = [star for star, rms in zip(good_stars, rms_values,
+                                              strict=True)
+                    if np.isfinite(rms) and rms <= threshold]
+
+        return selected if len(selected) > 0 else good_stars
+
+    def _combine_residual_stack(self, residuals, weights, x_coords, y_coords):
+        """
+        Combine a residual stack into a single robust 2D residual image.
+        """
+        _, ny, nx = residuals.shape
+        combined = np.full((ny, nx), np.nan)
+        counts = np.zeros((ny, nx), dtype=int)
+
+        for i in range(ny):
+            for j in range(nx):
+                z = residuals[:, i, j]
+                valid = np.isfinite(z)
+                valid_count = np.count_nonzero(valid)
+                counts[i, j] = valid_count
+                if valid_count < self.residual_min_valid_samples:
+                    continue
+
+                z = z[valid]
+                w = weights[valid, i, j]
+                x = x_coords[valid, i, j]
+                y = y_coords[valid, i, j]
+
+                if self.residual_outlier_clip is not None and z.size >= 3:
+                    center = np.nanmedian(z)
+                    scale = self._mad_std(z)
+                    if np.isfinite(scale) and scale > 0.0:
+                        keep = np.abs(z - center) <= (self.residual_outlier_clip
+                                                      * scale)
+                        if np.count_nonzero(keep) >= self.residual_min_valid_samples:
+                            z = z[keep]
+                            w = w[keep]
+                            x = x[keep]
+                            y = y[keep]
+
+                if z.size < self.residual_min_valid_samples:
+                    continue
+
+                if self.gridpoint_estimation == 'mean':
+                    combined[i, j] = np.nanmean(z)
+                elif self.gridpoint_estimation == 'median':
+                    combined[i, j] = np.nanmedian(z)
+                elif self.gridpoint_estimation == 'weighted_mean':
+                    valid_w = np.isfinite(w) & (w > 0.0)
+                    if np.count_nonzero(valid_w) < self.residual_min_valid_samples:
+                        continue
+                    denom = np.nansum(w[valid_w])
+                    if denom > 0.0:
+                        combined[i, j] = np.nansum(z[valid_w] * w[valid_w]) / denom
+                elif self.gridpoint_estimation == 'polyfit':
+                    if z.size <= 10:
+                        combined[i, j] = np.nanmedian(z)
+                    else:
+                        A = np.column_stack((np.ones_like(x), x, y,
+                                             x**2, x * y, y**2))
+                        coeffs, _, _, _ = np.linalg.lstsq(A, z, rcond=None)
+                        combined[i, j] = coeffs[0]
+                else:
+                    msg = 'Unsupported gridpoint_estimation method'
+                    raise TypeError(msg)
+
+        return combined, counts
+
+    def _despike_residuals(self, residuals):
+        """
+        Replace isolated hot residual cells with the local median.
+        """
+        if not self.residual_despike:
+            return residuals
+
+        footprint = np.ones(tuple(self.residual_despike_boxsize), dtype=bool)
+        center = tuple(size // 2 for size in self.residual_despike_boxsize)
+        footprint[center] = False
+
+        despiked = residuals.copy()
+        hot_mask = np.zeros_like(residuals, dtype=bool)
+
+        for _ in range(self.residual_despike_passes):
+            local_median = median_filter(despiked, footprint=footprint,
+                                         mode='nearest')
+            if self.residual_despike_mode == 'strict':
+                despiked = local_median
+                hot_mask = np.ones_like(residuals, dtype=bool)
+                continue
+
+            local_abs_dev = median_filter(np.abs(despiked - local_median),
+                                          footprint=footprint,
+                                          mode='nearest')
+            local_scale = 1.4826 * local_abs_dev
+
+            hot_mask = np.abs(despiked - local_median) > (
+                self.residual_despike_threshold * local_scale)
+            hot_mask &= np.isfinite(despiked)
+            hot_mask &= np.isfinite(local_median)
+
+            if not np.any(hot_mask):
+                break
+
+            despiked[hot_mask] = local_median[hot_mask]
+
+        # TEMP: Plot the hot mask for diagnostics
+        if self.plot_ppe_diagnostics:
+            import matplotlib.pyplot as plt
+            plt.figure(figsize=(6, 6))
+            plt.imshow(hot_mask, origin='lower', cmap='Reds')
+            plt.title('Hot Residual Mask')
+            plt.xlabel('X Pixel Index')
+            plt.ylabel('Y Pixel Index')
+            plt.colorbar(label='Hot Mask Value')
+            plt.show()
+
+        return despiked
+
+    def _plot_residual_quadrant_stacks(self, stack_stars, residuals, weights,
+                                       x_coords, y_coords):
+        """
+        Plot combined residual stacks split by detector-position quadrant.
+        """
+        if not self.plot_ppe_diagnostics or len(stack_stars) == 0:
+            return
+
+        centers = np.asarray([star.center for star in stack_stars], dtype=float)
+        if centers.ndim != 2 or centers.shape[1] != 2:
+            return
+
+        xmin, ymin = np.min(centers, axis=0)
+        xmax, ymax = np.max(centers, axis=0)
+        xmid = 0.5 * (xmin + xmax)
+        ymid = 0.5 * (ymin + ymax)
+
+        quadrant_masks = (
+            ((centers[:, 0] <= xmid) & (centers[:, 1] <= ymid), 'Lower Left'),
+            ((centers[:, 0] > xmid) & (centers[:, 1] <= ymid), 'Lower Right'),
+            ((centers[:, 0] <= xmid) & (centers[:, 1] > ymid), 'Upper Left'),
+            ((centers[:, 0] > xmid) & (centers[:, 1] > ymid), 'Upper Right'),
+        )
+
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10),
+                                 constrained_layout=True)
+        axes = axes.ravel()
+
+        for ax, (mask, title) in zip(axes, quadrant_masks, strict=True):
+            if not np.any(mask):
+                combined = np.full(residuals.shape[1:], np.nan)
+            else:
+                combined, _ = self._combine_residual_stack(
+                    residuals[mask], weights[mask], x_coords[mask], y_coords[mask])
+
+            im = ax.imshow(combined, origin='lower', cmap='coolwarm')
+            ax.set_title(f'{title} ({np.count_nonzero(mask)} stars)')
+            ax.set_xlabel('X Pixel Index')
+            ax.set_ylabel('Y Pixel Index')
+            fig.colorbar(im, ax=ax, label='Residual Value')
+
+        fig.suptitle('Combined Residual Stacks by Image Region')
+        plt.show()
+
+    def _plot_residual_flux_stacks(self, stack_stars, residuals, weights,
+                                   x_coords, y_coords):
+        """
+        Plot combined residual stacks split by stellar flux.
+        """
+        if not self.plot_ppe_diagnostics or len(stack_stars) == 0:
+            return
+
+        fluxes = np.asarray([star.flux for star in stack_stars], dtype=float)
+        valid = np.isfinite(fluxes)
+        if np.count_nonzero(valid) == 0:
+            return
+
+        fluxes_valid = fluxes[valid]
+        fmin = np.min(fluxes_valid)
+        fmax = np.max(fluxes_valid)
+        if fmin == fmax:
+            bin_masks = (
+                (valid, 'All Fluxes'),
+                (np.zeros_like(valid, dtype=bool), 'Mid Flux'),
+                (np.zeros_like(valid, dtype=bool), 'High Flux'),
+            )
+        else:
+            edges = np.linspace(fmin, fmax, 4)
+            bin_masks = (
+                (valid & (fluxes >= edges[0]) & (fluxes <= edges[1]),
+                 f'Low Flux [{edges[0]:.3g}, {edges[1]:.3g}]'),
+                (valid & (fluxes > edges[1]) & (fluxes <= edges[2]),
+                 f'Mid Flux ({edges[1]:.3g}, {edges[2]:.3g}]'),
+                (valid & (fluxes > edges[2]) & (fluxes <= edges[3]),
+                 f'High Flux ({edges[2]:.3g}, {edges[3]:.3g}]'),
+            )
+
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5),
+                                 constrained_layout=True)
+
+        for ax, (mask, title) in zip(axes, bin_masks, strict=True):
+            if not np.any(mask):
+                combined = np.full(residuals.shape[1:], np.nan)
+            else:
+                combined, _ = self._combine_residual_stack(
+                    residuals[mask], weights[mask], x_coords[mask], y_coords[mask])
+
+            im = ax.imshow(combined, origin='lower', cmap='coolwarm')
+            ax.set_title(f'{title}\n({np.count_nonzero(mask)} stars)')
+            ax.set_xlabel('X Pixel Index')
+            ax.set_ylabel('Y Pixel Index')
+            fig.colorbar(im, ax=ax, label='Residual Value')
+
+        fig.suptitle('Combined Residual Stacks by Flux Bin')
+        plt.show()
+
+    def _build_epsf_step(self, stars, epsf=None, *, iter_num=None):
         """
         A single iteration of improving an ePSF.
 
@@ -995,86 +1401,55 @@ class EPSFBuilder:
             # improve the input ePSF
             epsf = copy.deepcopy(epsf)
 
+        stack_stars = self._select_residual_stars(stars, epsf)
+        if len(stack_stars) == 0:
+            stack_stars = stars.all_good_stars
+
         # compute a 3D stack of 2D residual images
-        residuals, weights, x_coords, y_coords = self._resample_residuals(stars, epsf)
+        residuals, weights, x_coords, y_coords = self._resample_residuals(
+            EPSFStars(stack_stars), epsf)
 
-        # compute the sigma-clipped average along the 3D stack
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore', category=RuntimeWarning)
-            warnings.simplefilter('ignore', category=AstropyUserWarning)
+        self._plot_residual_quadrant_stacks(stack_stars, residuals, weights,
+                                            x_coords, y_coords)
+        self._plot_residual_flux_stacks(stack_stars, residuals, weights,
+                                        x_coords, y_coords)
 
-            if self.gridpoint_estimation == 'mean':
-                residuals = self._sigma_clip(residuals, axis=0, masked=False,
-                                            return_bounds=False)
-                residuals = np.nanmean(residuals, axis=0)
+        residuals, residual_counts = self._combine_residual_stack(
+            residuals, weights, x_coords, y_coords)
 
-            elif self.gridpoint_estimation == 'median':
-                residuals = self._sigma_clip(residuals, axis=0, masked=False,
-                                            return_bounds=False)
-                residuals = nanmedian(residuals, axis=0)
-
-            elif self.gridpoint_estimation == 'weighted_mean':
-                # Create a masked array to perform sigma clipping
-                residuals = self._sigma_clip(residuals, axis=0, masked=True,
-                             return_bounds=False)
-                # Fill masked values with np.nan
-                residuals = residuals.filled(np.nan)
-                # Created masked weights array with same mask as residuals
-                weights = np.ma.masked_array(weights, mask=np.isnan(residuals))
-                # Fill masked weight values with np.nan
-                weights = weights.filled(np.nan)
-                # Iterate over the residuals and weights to calculate the weighted average
-                residuals = np.nansum(residuals * weights, axis=0) / np.nansum(weights, axis=0)
-
-            elif self.gridpoint_estimation == 'polyfit':
-                # Fit a 2D quadratic polynomialsurface to the residuals for
-                # each gridsection.
-                # Assume residuals, x_coords, y_coords are already defined
-                N, My, Mx = residuals.shape  # Shape of the input 3D matrices
-                fitted_matrix = np.full((My, Mx), np.nan)  # Initialize with NaNs
-
-                for i in range(My):
-                    for j in range(Mx):
-                        # Extract valid samples across N slices
-                        valid_mask = ~np.isnan(residuals[:, i, j])
-                        x_samples = x_coords[valid_mask, i, j]
-                        y_samples = y_coords[valid_mask, i, j]
-                        z_samples = residuals[valid_mask, i, j]
-                        
-                        num_samples = len(z_samples)
-                        if num_samples < 3:
-                            continue
-                        elif num_samples <= 10:
-                            # Not enough samples for a quadratic fit, so just take the median of the valid samples
-                            fitted_matrix[i, j] = np.nanmedian(z_samples)
-                        elif num_samples > 10:
-                            A = np.column_stack( (
-                                np.ones_like(x_samples), x_samples, y_samples, x_samples**2, x_samples*y_samples, y_samples**2
-                            ))
-                            coeffs, _, _, _ = np.linalg.lstsq(A, z_samples, rcond=None)
-                            fitted_matrix[i, j] = coeffs[0]  # Evaluate at (0,0)
-
-                residuals = fitted_matrix
-
-            else:
-                msg = 'Unsupported gridpoint_estimation method'
-                raise TypeError(msg)
-
-        # interpolate any missing data (np.nan)
-        mask = ~np.isfinite(residuals)
-        if np.any(mask):
-            residuals = _interpolate_missing_data(residuals, mask,
-                                                  method='nearest')
-
-            # fill any remaining nans (outer points) with zeros
-            residuals[~np.isfinite(residuals)] = 0.0
+        # Leave underconstrained cells unchanged in this iteration.
+        residuals[~np.isfinite(residuals)] = 0.0
+        if iter_num is None or iter_num >= 2:
+            residuals = self._despike_residuals(residuals)
 
         if self.residual_smoothing is not None:
             # Smooth the residuals
             residuals = convolve(residuals, self.residual_smoothing)
 
+        # Plot the residuals
+        if self.plot_ppe_diagnostics:
+            import matplotlib.pyplot as plt
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6),
+                                     constrained_layout=True)
+
+            im0 = axes[0].imshow(residuals, origin='lower', cmap='viridis')
+            axes[0].set_title('Smoothed Residuals')
+            axes[0].set_xlabel('X Pixel Index')
+            axes[0].set_ylabel('Y Pixel Index')
+            fig.colorbar(im0, ax=axes[0], label='Residual Value')
+
+            im1 = axes[1].imshow(residual_counts, origin='lower',
+                                 cmap='magma')
+            axes[1].set_title('Residual Sample Counts')
+            axes[1].set_xlabel('X Pixel Index')
+            axes[1].set_ylabel('Y Pixel Index')
+            fig.colorbar(im1, ax=axes[1], label='Valid Sample Count')
+
+            plt.show()
+
         # add the residuals to the previous ePSF image
-        new_epsf_data = epsf.data + residuals
+        new_epsf_data = epsf.data + (self.residual_update_fraction
+                                     * residuals)
 
         if self.epsf_nonnegative:
             # Constrain the ePSF model to be non-negative
@@ -1165,6 +1540,254 @@ class EPSFBuilder:
         resampled_epsf_data = epsf.evaluate(x=xx, y=yy, flux=1.0, x_0=0.0, y_0=0.0)
 
         return resampled_epsf_data
+    
+    def _collect_ppe_residual_results(self, stars):
+        """
+        Collect PPE residual samples from linked stars.
+        """
+        residual_results = {'subpixel_x': [], 'subpixel_y': [],
+                            'x_residual': [], 'y_residual': [],
+                            'flux_residual': [], 'center_x': [],
+                            'center_y': []}
+
+        # Iterate over the linked stars in stars
+        for linked_star in stars._data:
+            if not isinstance(linked_star, LinkedEPSFStar):
+                continue
+            mean_flux = linked_star.get_mean_flux()
+            mean_ra, mean_dec = linked_star.get_mean_radec()
+            if mean_flux is None or not np.isfinite(mean_flux):
+                continue
+
+            # Iterate over each star in the linked star.
+            for star in linked_star.all_good_stars:
+                if star.wcs_large is None:
+                    continue
+
+                # Calculate the linked-star mean sky position projected
+                # onto this detector frame.
+                mean_x, mean_y = star.wcs_large.world_to_pixel_values(
+                    mean_ra, mean_dec)
+                if not (np.isfinite(mean_x) and np.isfinite(mean_y)):
+                    continue
+
+                # Calculate the measured-minus-mean residuals.
+                x_residual = star.center[0] - mean_x
+                y_residual = star.center[1] - mean_y
+
+                if mean_flux == 0.0:
+                    flux_residual = 0.0
+                else:
+                    flux_residual = (star.flux - mean_flux) / mean_flux
+
+                # Record the residuals with the measured (uncorrected)
+                # subpixel position of the star.
+                residual_results['subpixel_x'].append(np.mod(star.center[0],
+                                                             1.0))
+                residual_results['subpixel_y'].append(np.mod(star.center[1],
+                                                             1.0))
+                residual_results['x_residual'].append(x_residual)
+                residual_results['y_residual'].append(y_residual)
+                residual_results['flux_residual'].append(flux_residual)
+                residual_results['center_x'].append(star.center[0])
+                residual_results['center_y'].append(star.center[1])
+
+        return residual_results
+
+    def _generate_ppe_map_from_results(self, residual_results,
+                                       supersampling=None):
+        """
+        Generate a PPE map from precomputed residual samples.
+        """
+        if supersampling is None:
+            supersampling = self.oversampling
+        supersampling = as_pair('supersampling', supersampling,
+                                lower_bound=(1, 1))
+
+        # Set up results arrays for the PPE maps
+        ppe_flux_map = np.full((supersampling[0], supersampling[1]), np.nan)
+        ppe_x_map = np.full((supersampling[0], supersampling[1]), np.nan)
+        ppe_y_map = np.full((supersampling[0], supersampling[1]), np.nan)
+
+        if len(residual_results['subpixel_x']) == 0:
+            return PPEMap(supersampling, np.zeros_like(ppe_flux_map),
+                          np.zeros_like(ppe_x_map),
+                          np.zeros_like(ppe_y_map))
+
+        subpixel_x = np.asarray(residual_results['subpixel_x'])
+        subpixel_y = np.asarray(residual_results['subpixel_y'])
+        flux_residual = np.asarray(residual_results['flux_residual'])
+        x_residual = np.asarray(residual_results['x_residual'])
+        y_residual = np.asarray(residual_results['y_residual'])
+
+        xbin = np.floor(subpixel_x * supersampling[1]).astype(int)
+        ybin = np.floor(subpixel_y * supersampling[0]).astype(int)
+        xbin = np.clip(xbin, 0, supersampling[1] - 1)
+        ybin = np.clip(ybin, 0, supersampling[0] - 1)
+
+        # Generate the PPE map arrays from the residual results using
+        # the median value in each supersampled subpixel bin.
+        for j in range(supersampling[0]):
+            for i in range(supersampling[1]):
+                mask = (xbin == i) & (ybin == j)
+                if not np.any(mask):
+                    continue
+                ppe_flux_map[j, i] = np.nanmedian(flux_residual[mask])
+                ppe_x_map[j, i] = np.nanmedian(x_residual[mask])
+                ppe_y_map[j, i] = np.nanmedian(y_residual[mask])
+
+        for ppe_map, fill_value in ((ppe_flux_map, 0.0), (ppe_x_map, 0.0),
+                                    (ppe_y_map, 0.0)):
+            mask = ~np.isfinite(ppe_map)
+            if not np.any(mask):
+                continue
+            if np.all(mask):
+                ppe_map[:] = fill_value
+                continue
+            ppe_map[:] = _interpolate_missing_data(ppe_map, mask=mask,
+                                                   method='nearest')
+            ppe_map[~np.isfinite(ppe_map)] = fill_value
+
+        # Generate a PPEMap object from the PPE map arrays.
+        return PPEMap(supersampling, ppe_flux_map, ppe_x_map, ppe_y_map)
+
+    def _generate_ppe_map(self, stars, supersampling=None):
+        """
+        Generate supersampled 2D PPE maps for the flux and position
+        measurements of the stars.
+        """
+        residual_results = self._collect_ppe_residual_results(stars)
+        return self._generate_ppe_map_from_results(residual_results,
+                                                   supersampling=supersampling)
+
+    def _plot_ppe_region_diagnostics(self, stars, supersampling=None):
+        """
+        Plot PPE maps split by detector-position quadrant.
+        """
+        if not self.plot_ppe_diagnostics:
+            return None
+
+        residual_results = self._collect_ppe_residual_results(stars)
+        if len(residual_results['subpixel_x']) == 0:
+            return None
+
+        center_x = np.asarray(residual_results['center_x'], dtype=float)
+        center_y = np.asarray(residual_results['center_y'], dtype=float)
+        xmin = np.min(center_x)
+        xmax = np.max(center_x)
+        ymin = np.min(center_y)
+        ymax = np.max(center_y)
+        xmid = 0.5 * (xmin + xmax)
+        ymid = 0.5 * (ymin + ymax)
+
+        quadrant_masks = (
+            ((center_x <= xmid) & (center_y <= ymid), 'Lower Left'),
+            ((center_x > xmid) & (center_y <= ymid), 'Lower Right'),
+            ((center_x <= xmid) & (center_y > ymid), 'Upper Left'),
+            ((center_x > xmid) & (center_y > ymid), 'Upper Right'),
+        )
+
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(4, 3, figsize=(12, 14),
+                                 constrained_layout=True)
+        sample_factor = 3
+        map_specs = (
+            ('flux_ppe', 'Flux PPE', 'Fractional flux residual'),
+            ('x_ppe', 'X PPE', 'X residual (pixels)'),
+            ('y_ppe', 'Y PPE', 'Y residual (pixels)'),
+        )
+        extent = (0.0, 1.0, 0.0, 1.0)
+
+        for row, (mask, region_title) in enumerate(quadrant_masks):
+            region_results = {}
+            for key, values in residual_results.items():
+                arr = np.asarray(values)
+                region_results[key] = arr[mask]
+
+            region_map = self._generate_ppe_map_from_results(
+                region_results, supersampling=supersampling)
+
+            yphase = np.linspace(0.0, 1.0,
+                                 region_map.supersampling[0] * sample_factor,
+                                 endpoint=False)
+            xphase = np.linspace(0.0, 1.0,
+                                 region_map.supersampling[1] * sample_factor,
+                                 endpoint=False)
+            xx, yy = np.meshgrid(xphase, yphase)
+
+            sampled_maps = (
+                region_map._sample_periodic_map(region_map.flux_ppe, xx, yy,
+                                                region_map.supersampling),
+                region_map._sample_periodic_map(region_map.x_ppe, xx, yy,
+                                                region_map.supersampling),
+                region_map._sample_periodic_map(region_map.y_ppe, xx, yy,
+                                                region_map.supersampling),
+            )
+
+            for col, ((_, title, cbar_label), data) in enumerate(
+                    zip(map_specs, sampled_maps, strict=True)):
+                ax = axes[row, col]
+                im = ax.imshow(data, origin='lower', extent=extent,
+                               cmap='coolwarm', aspect='equal')
+                ax.set_title(f'{region_title}: {title}')
+                ax.set_xlabel('Subpixel x phase')
+                ax.set_ylabel('Subpixel y phase')
+                fig.colorbar(im, ax=ax, label=cbar_label)
+
+        return fig
+
+    def _plot_ppe_diagnostics(self, stars, ppe_map):
+        """
+        Plot PPE diagnostics when enabled.
+        """
+        if not self.plot_ppe_diagnostics:
+            return None
+
+        ppe_map.plot_maps()
+        return self._plot_ppe_region_diagnostics(stars)
+
+    def _correct_stars_ppe(self, stars, ppe_map, *, apply_flux=True,
+                           apply_position=True, flux_damping=1.0):
+        """
+        Apply PPE corrections to the stars' fitted fluxes and centers.
+        """
+        corrected_stars = copy.deepcopy(stars)
+
+        for star in corrected_stars.all_stars:
+            corrected_flux, corrected_x, corrected_y = ppe_map(
+                star.flux, star.center[0], star.center[1])
+            if apply_flux:
+                star.flux = (star.flux
+                             + flux_damping * (corrected_flux - star.flux))
+            if apply_position:
+                star.cutout_center = np.array((corrected_x, corrected_y),
+                                              dtype=float) - star.origin
+
+        return corrected_stars
+
+    def _apply_ppe_corrections(self, stars, ppe_map, *, iteration=None,
+                               final=False):
+        """
+        Apply PPE corrections using the configured in-loop/final policy.
+        """
+        apply_position = self.apply_position_ppe
+        apply_flux = False
+        flux_damping = self.flux_ppe_damping
+
+        if final:
+            apply_flux = self.apply_final_flux_ppe
+            flux_damping = 1.0
+        elif self.apply_flux_ppe and iteration is not None:
+            apply_flux = (iteration % self.flux_ppe_update_every) == 0
+
+        if not apply_position and not apply_flux:
+            return stars
+
+        return self._correct_stars_ppe(stars, ppe_map,
+                                       apply_flux=apply_flux,
+                                       apply_position=apply_position,
+                                       flux_damping=flux_damping)
 
     def _get_init_epsf(self, epsf):
         """
@@ -1236,7 +1859,11 @@ class EPSFBuilder:
 
                 stars = self.fitter(image_psf, stars)
 
-        # Initial constrain centres and fluxes of linked stars
+        ppe_map = self._generate_ppe_map(stars)
+        self._plot_ppe_diagnostics(stars, ppe_map)
+        stars = self._apply_ppe_corrections(stars, ppe_map, iteration=0)
+
+        # Initial constrain centres of linked stars
         stars.constrain_linked_centres()
         stars.constrain_linked_fluxes()
 
@@ -1258,7 +1885,8 @@ class EPSFBuilder:
                 self.residual_smoothing = residual_smoothing_backup
 
             # build/improve the ePSF
-            legacy_epsf = self._build_epsf_step(stars, epsf=legacy_epsf)
+            legacy_epsf = self._build_epsf_step(stars, epsf=legacy_epsf,
+                                                iter_num=iter_num)
 
             # fit the new ePSF to the stars to find improved centers
             # we catch fit warnings here -- stars with unsuccessful fits
@@ -1275,7 +1903,12 @@ class EPSFBuilder:
 
                 stars = self.fitter(image_psf, stars)
 
-            # Constrain centres and fluxes of linked stars
+            ppe_map = self._generate_ppe_map(stars)
+            self._plot_ppe_diagnostics(stars, ppe_map)
+            stars = self._apply_ppe_corrections(stars, ppe_map,
+                                                iteration=iter_num)
+
+            # # Constrain centres of linked stars
             stars.constrain_linked_centres()
             stars.constrain_linked_fluxes()
 
@@ -1355,4 +1988,141 @@ class EPSFBuilder:
                         oversampling=legacy_epsf.oversampling,
                         fill_value=legacy_epsf.fill_value)
 
+        ppe_map = self._generate_ppe_map(stars)
+        stars = self._apply_ppe_corrections(stars, ppe_map, final=True)
+
         return epsf, stars
+
+
+class PPEMap:
+    def __init__(self, supersampling, flux_ppe, x_ppe, y_ppe):
+        self.supersampling = supersampling
+        self.flux_ppe = flux_ppe
+        self.x_ppe = x_ppe
+        self.y_ppe = y_ppe
+
+    @staticmethod
+    def _sample_periodic_map(ppe_map, x, y, supersampling):
+        """
+        Bilinearly interpolate a periodic supersampled PPE map.
+        """
+        xphase = np.mod(x, 1.0)
+        yphase = np.mod(y, 1.0)
+
+        xcoord = xphase * supersampling[1] - 0.5
+        ycoord = yphase * supersampling[0] - 0.5
+
+        x0 = np.floor(xcoord).astype(int)
+        y0 = np.floor(ycoord).astype(int)
+        dx = xcoord - x0
+        dy = ycoord - y0
+
+        x0 %= supersampling[1]
+        y0 %= supersampling[0]
+        x1 = (x0 + 1) % supersampling[1]
+        y1 = (y0 + 1) % supersampling[0]
+
+        return ((1.0 - dx) * (1.0 - dy) * ppe_map[y0, x0]
+                + dx * (1.0 - dy) * ppe_map[y0, x1]
+                + (1.0 - dx) * dy * ppe_map[y1, x0]
+                + dx * dy * ppe_map[y1, x1])
+        
+    def __call__(self, flux, x, y):
+        """
+        Apply the PPE correction to the input flux and position measurements.
+
+        Parameters
+        ----------
+        flux : float or array-like
+            The flux measurement(s) to correct.
+
+        x : float or array-like
+            The x position measurement(s) to correct.
+
+        y : float or array-like
+            The y position measurement(s) to correct.
+
+        Returns
+        -------
+        corrected_flux : float or array-like
+            The PPE-corrected flux measurement(s).
+
+        corrected_x : float or array-like
+            The PPE-corrected x position measurement(s).
+
+        corrected_y : float or array-like
+            The PPE-corrected y position measurement(s).
+        """
+        flux_scalar = np.isscalar(flux)
+        x_scalar = np.isscalar(x)
+        y_scalar = np.isscalar(y)
+
+        flux, x, y = np.broadcast_arrays(np.asanyarray(flux, dtype=float),
+                                         np.asanyarray(x, dtype=float),
+                                         np.asanyarray(y, dtype=float))
+
+        flux_residual = self._sample_periodic_map(self.flux_ppe, x, y,
+                                                  self.supersampling)
+        x_residual = self._sample_periodic_map(self.x_ppe, x, y,
+                                               self.supersampling)
+        y_residual = self._sample_periodic_map(self.y_ppe, x, y,
+                                               self.supersampling)
+
+        flux_scale = 1.0 + flux_residual
+        invalid_flux_scale = (~np.isfinite(flux_scale)) | (flux_scale == 0.0)
+        corrected_flux = np.array(flux, copy=True)
+        np.divide(flux, flux_scale, out=corrected_flux,
+                  where=~invalid_flux_scale)
+
+        x_residual = np.where(np.isfinite(x_residual), x_residual, 0.0)
+        y_residual = np.where(np.isfinite(y_residual), y_residual, 0.0)
+        corrected_x = x - x_residual
+        corrected_y = y - y_residual
+
+        if flux_scalar and x_scalar and y_scalar:
+            return corrected_flux.item(), corrected_x.item(), corrected_y.item()
+
+        return corrected_flux, corrected_x, corrected_y
+    
+    def plot_maps(self):
+        """
+        Plot the PPE maps for visual inspection.
+        """
+        import matplotlib.pyplot as plt
+
+        # Define the subpixel x and y positions over which to sample the maps
+        sample_factor = 3
+
+        yphase = np.linspace(0.0, 1.0, self.supersampling[0] * sample_factor,
+                             endpoint=False)
+        xphase = np.linspace(0.0, 1.0, self.supersampling[1] * sample_factor,
+                             endpoint=False)
+        xx, yy = np.meshgrid(xphase, yphase)
+
+        # Evaluate the flux, x, and y PPE maps at these positions
+        flux_map = self._sample_periodic_map(self.flux_ppe, xx, yy,
+                                             self.supersampling)
+        x_map = self._sample_periodic_map(self.x_ppe, xx, yy,
+                                          self.supersampling)
+        y_map = self._sample_periodic_map(self.y_ppe, xx, yy,
+                                          self.supersampling)
+
+        # Plot the maps as three subplots each with their own colorbar
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), constrained_layout=True)
+
+        map_data = (
+            (flux_map, 'Flux PPE', 'Fractional flux residual'),
+            (x_map, 'X PPE', 'X residual (pixels)'),
+            (y_map, 'Y PPE', 'Y residual (pixels)'),
+        )
+        extent = (0.0, 1.0, 0.0, 1.0)
+
+        for ax, (data, title, cbar_label) in zip(axes, map_data):
+            im = ax.imshow(data, origin='lower', extent=extent, cmap='coolwarm',
+                           aspect='equal')
+            ax.set_title(title)
+            ax.set_xlabel('Subpixel x phase')
+            ax.set_ylabel('Subpixel y phase')
+            fig.colorbar(im, ax=ax, label=cbar_label)
+
+        plt.show()
