@@ -20,3 +20,4 @@ from .simulation import *  # noqa: F401, F403
 from .utils import *  # noqa: F401, F403
 from .fitters import *  # noqa: F401, F403
 from .spatial_epsf import *  # noqa: F401, F403
+from .gridded_epsf import *  # noqa: F401, F403
