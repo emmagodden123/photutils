@@ -11,6 +11,7 @@ appreciably across the image.
 
 import copy
 import warnings
+from functools import partial
 
 import numpy as np
 from astropy.convolution import Gaussian2DKernel
@@ -24,7 +25,7 @@ from photutils.centroids import centroid_com
 from photutils.psf.epsf_stars import EPSFStar, EPSFStars, LinkedEPSFStar
 from photutils.psf.image_models import ImagePSF
 from photutils.psf.utils import _interpolate_missing_data
-from photutils.utils._parameters import as_pair, create_default_sigmaclip
+from photutils.utils._parameters import as_pair
 from photutils.utils._progress_bars import add_progress_bar
 from photutils.utils._round import py2intround
 from photutils.utils._stats import nanmedian
@@ -50,6 +51,15 @@ class SpatialEPSFModel:
     detector_shape : tuple of int
         The detector/image shape in ``(ny, nx)`` order.
 
+    detector_origin : tuple of float, optional
+        The detector-coordinate origin, in ``(y, x)`` order, used when
+        normalizing detector positions. The default is ``(0, 0)``.
+
+    detector_span : tuple of float, optional
+        The detector-coordinate span, in ``(y, x)`` order, used when
+        normalizing detector positions. By default this is inferred from
+        ``detector_shape - 1``.
+
     degree : int, optional
         Polynomial degree in detector position. Supported values are 0,
         1, and 2. The default is 1.
@@ -60,7 +70,9 @@ class SpatialEPSFModel:
 
     def __init__(self, coeff_data, *, oversampling, detector_shape,
                  degree=1, origin=None, fill_value=0.0,
-                 normalize_local_epsf=True, trust_map=None):
+                 detector_origin=None, detector_span=None,
+                 normalize_local_epsf=True, trust_map=None,
+                 epsf_class=ImagePSF):
         self.coeff_data = np.asanyarray(coeff_data, dtype=float)
         if self.coeff_data.ndim != 3:
             raise ValueError('coeff_data must be a 3D array')
@@ -69,6 +81,21 @@ class SpatialEPSFModel:
                                     lower_bound=(0, 1))
         self.detector_shape = as_pair('detector_shape', detector_shape,
                                       lower_bound=(2, 2))
+        if detector_origin is None:
+            detector_origin = (0.0, 0.0)
+        self.detector_origin = np.asanyarray(detector_origin, dtype=float)
+        if self.detector_origin.shape != (2,):
+            raise ValueError('detector_origin must have shape (2,)')
+        if not np.all(np.isfinite(self.detector_origin)):
+            raise ValueError('detector_origin must contain only finite values')
+
+        if detector_span is None:
+            detector_span = self.detector_shape - 1
+        self.detector_span = np.asanyarray(detector_span, dtype=float)
+        if self.detector_span.shape != (2,):
+            raise ValueError('detector_span must have shape (2,)')
+        if not np.all(np.isfinite(self.detector_span)):
+            raise ValueError('detector_span must contain only finite values')
         self.degree = int(degree)
         if self.degree not in (0, 1, 2):
             raise ValueError('degree must be 0, 1, or 2')
@@ -80,6 +107,13 @@ class SpatialEPSFModel:
         self.origin = origin
         self.fill_value = fill_value
         self.normalize_local_epsf = bool(normalize_local_epsf)
+        self.epsf_class = epsf_class
+        if isinstance(self.epsf_class, partial):
+            candidate = self.epsf_class.func
+        else:
+            candidate = self.epsf_class
+        if not issubclass(candidate, ImagePSF):
+            raise TypeError('epsf_class must be a subclass of ImagePSF')
 
         if trust_map is not None:
             trust_map = np.asanyarray(trust_map, dtype=float)
@@ -107,8 +141,10 @@ class SpatialEPSFModel:
         x = np.asanyarray(x, dtype=float)
         y = np.asanyarray(y, dtype=float)
 
-        xnorm = 2.0 * (x / max(self.detector_shape[1] - 1, 1)) - 1.0
-        ynorm = 2.0 * (y / max(self.detector_shape[0] - 1, 1)) - 1.0
+        xnorm = 2.0 * ((x - self.detector_origin[1])
+                       / max(self.detector_span[1], 1.0)) - 1.0
+        ynorm = 2.0 * ((y - self.detector_origin[0])
+                       / max(self.detector_span[0], 1.0)) - 1.0
         return xnorm, ynorm
 
     def basis_vector(self, x, y):
@@ -138,8 +174,9 @@ class SpatialEPSFModel:
         data = self.local_epsf_data(x, y)
         if self.normalize_local_epsf:
             data = self._normalise_local_epsf_data(data)
-        image_psf = ImagePSF(data=data, oversampling=self.oversampling,
-                             origin=self.origin, fill_value=self.fill_value)
+        image_psf = self.epsf_class(data=data, oversampling=self.oversampling,
+                                    origin=self.origin,
+                                    fill_value=self.fill_value)
         trust_map = getattr(self, 'trust_map', None)
         if trust_map is not None:
             image_psf.trust_map = np.array(trust_map, copy=True)
@@ -326,13 +363,13 @@ class SpatialEPSFModel:
 
         return fig, axes
 
-    def _normalise_local_epsf_data(self, data):
+    def _local_epsf_normalization(self, data):
         """
-        Normalize a local oversampled ePSF image so that its values
-        sampled at native pixel centers sum to unity.
+        Return the native-pixel-center normalization factor for a local
+        oversampled ePSF image.
         """
-        epsf = ImagePSF(data=data, oversampling=self.oversampling,
-                        origin=self.origin, fill_value=self.fill_value)
+        epsf = self.epsf_class(data=data, oversampling=self.oversampling,
+                               origin=self.origin, fill_value=self.fill_value)
 
         box_size = np.asarray(np.asarray(data.shape) / self.oversampling,
                               dtype=int)
@@ -343,7 +380,14 @@ class SpatialEPSFModel:
         norm_y = np.arange(-half_y, half_y + 1)
         yy, xx = np.meshgrid(norm_y, norm_x)
         vals = epsf.evaluate(x=xx, y=yy, flux=1.0, x_0=0.0, y_0=0.0)
-        total = np.nansum(vals)
+        return np.nansum(vals)
+
+    def _normalise_local_epsf_data(self, data):
+        """
+        Normalize a local oversampled ePSF image so that its values
+        sampled at native pixel centers sum to unity.
+        """
+        total = self._local_epsf_normalization(data)
         if np.isfinite(total) and total > 0.0:
             return data / total
 
@@ -362,7 +406,8 @@ class SpatialPPEMapModel:
     """
 
     def __init__(self, flux_coeff, x_coeff, y_coeff, *, supersampling,
-                 detector_shape, degree=1):
+                 detector_shape, degree=1, detector_origin=None,
+                 detector_span=None):
         self.flux_coeff = np.asanyarray(flux_coeff, dtype=float)
         self.x_coeff = np.asanyarray(x_coeff, dtype=float)
         self.y_coeff = np.asanyarray(y_coeff, dtype=float)
@@ -370,6 +415,20 @@ class SpatialPPEMapModel:
                                      lower_bound=(1, 1))
         self.detector_shape = as_pair('detector_shape', detector_shape,
                                       lower_bound=(2, 2))
+        if detector_origin is None:
+            detector_origin = (0.0, 0.0)
+        self.detector_origin = np.asanyarray(detector_origin, dtype=float)
+        if self.detector_origin.shape != (2,):
+            raise ValueError('detector_origin must have shape (2,)')
+        if not np.all(np.isfinite(self.detector_origin)):
+            raise ValueError('detector_origin must contain only finite values')
+        if detector_span is None:
+            detector_span = self.detector_shape - 1
+        self.detector_span = np.asanyarray(detector_span, dtype=float)
+        if self.detector_span.shape != (2,):
+            raise ValueError('detector_span must have shape (2,)')
+        if not np.all(np.isfinite(self.detector_span)):
+            raise ValueError('detector_span must contain only finite values')
         self.degree = int(degree)
         if self.degree not in (0, 1, 2):
             raise ValueError('degree must be 0, 1, or 2')
@@ -390,7 +449,8 @@ class SpatialPPEMapModel:
         dummy = SpatialEPSFModel(np.zeros((len(
             SpatialEPSFModel._basis_labels_for_degree(self.degree)), 3, 3)),
             oversampling=(1, 1), detector_shape=self.detector_shape,
-            degree=self.degree)
+            degree=self.degree, detector_origin=self.detector_origin,
+            detector_span=self.detector_span)
         return dummy.basis_vector(x, y)
 
     def local_maps(self, x, y):
@@ -417,7 +477,7 @@ class SpatialEPSFFitter:
     local `ImagePSF` at each star's detector position before fitting.
     """
 
-    def __init__(self, *, fitter=None, fit_boxsize=5, progress_bar=False,
+    def __init__(self, *, fitter=None, fit_boxsize=3, progress_bar=False,
                  plot_fit_checks=False, model_weight_map=None,
                  model_weight_maxiters=1, model_weight_center_tol=1.0e-3,
                  **fitter_kwargs):
@@ -680,34 +740,39 @@ class SpatialEPSFBuilder:
     Linked stars can optionally be constrained after each fit iteration
     to share a common mean sky position and/or mean flux before the
     residual stack is formed.
+
+    If ``detector_shape`` is not provided, then the detector-coordinate
+    normalization is inferred from the distribution of the input star
+    centers and used as an approximation to the sampled detector region.
     """
 
-    def __init__(self, *, detector_shape, oversampling=4, shape=None,
-                 degree=1, fitter=None, maxiters=10, progress_bar=False,
+    def __init__(self, *,
+                 oversampling=4, 
+                 shape=None,
+                 degree=1, 
+                 epsf_class=ImagePSF,
+                 fitter=None, 
+                 maxiters=10, 
+                 progress_bar=False,
+                 center_accuracy=1.0e-3,
+                 detector_shape=None,
                  smoothing_kernel='quartic',
                  residual_smoothing_kernel='gaussian',
-                 recentering_func=centroid_com,
-                 recentering_maxiters=10,
-                 normalise_epsf=True, norm_radius=5,
-                 normalize_local_epsf=True,
-                 quadratic_offset_core_size=5,
-                 center_accuracy=1.0e-3,
-                 sigma_clip=None,
-                 residual_update_fraction=0.3,
-                 residual_min_valid_stars=10,
-                 constrain_linked_centers=True,
-                 constrain_linked_fluxes=True,
-                #  excluded_linked_star_ids=(17, 21, 27, 37, 3, 18, 6, 34),
-                 excluded_linked_star_ids=(3, 17, 21, 27, 37),
+                 recenter_epsf=True,
+                 normalise_epsf=True,
+                 calibrate_ppe=('Flux', 'Position'),
+                 constrain_stars=('Flux', 'Position'),
+                 residual_star_rms_clip=None,
+                 residual_outlier_clip=3.0,
+                 residual_min_valid_samples=10,
                  plot_diagnostics=False,
-                 ppe_degree=None,
-                 ppe_supersampling=None,
-                 ppe_min_valid_samples=10,
-                 apply_ppe_corrections=True,
-                 update_trust_map=True,
-                 trust_map_floor=1.0e-6):
-        self.detector_shape = as_pair('detector_shape', detector_shape,
-                                      lower_bound=(2, 2))
+                 ):
+        self._detector_shape_explicit = detector_shape is not None
+        self.detector_shape = (None if detector_shape is None else
+                               as_pair('detector_shape', detector_shape,
+                                       lower_bound=(2, 2)))
+        self.detector_origin = None
+        self.detector_span = None
         self.oversampling = as_pair('oversampling', oversampling,
                                     lower_bound=(0, 1))
         self.shape = None if shape is None else as_pair('shape', shape,
@@ -719,6 +784,13 @@ class SpatialEPSFBuilder:
         self.fitter = fitter if fitter is not None else SpatialEPSFFitter()
         if not isinstance(self.fitter, SpatialEPSFFitter):
             raise TypeError('fitter must be a SpatialEPSFFitter instance')
+        self.epsf_class = epsf_class
+        if isinstance(self.epsf_class, partial):
+            candidate = self.epsf_class.func
+        else:
+            candidate = self.epsf_class
+        if not issubclass(candidate, ImagePSF):
+            raise TypeError('epsf_class must be a subclass of ImagePSF')
 
         self.maxiters = int(maxiters)
         if self.maxiters <= 0:
@@ -726,57 +798,64 @@ class SpatialEPSFBuilder:
 
         self.progress_bar = bool(progress_bar)
         self.fitter.progress_bar = self.progress_bar
-        self.recentering_func = recentering_func
-        self.recentering_maxiters = int(recentering_maxiters)
+        self.recenter_epsf = bool(recenter_epsf)
         self.normalise_epsf = bool(normalise_epsf)
-        self.normalize_local_epsf = bool(normalize_local_epsf)
-        self.quadratic_offset_core_size = as_pair(
-            'quadratic_offset_core_size', quadratic_offset_core_size,
-            lower_bound=(1, 1), check_odd=True)
-        self._norm_radius = norm_radius
         self.center_accuracy_sq = float(center_accuracy)**2
-        self.residual_update_fraction = float(residual_update_fraction)
-        if not (0.0 < self.residual_update_fraction <= 1.0):
-            raise ValueError('residual_update_fraction must be in the '
-                             'range (0, 1]')
+        self.residual_update_fraction = 0.8
 
-        self.residual_min_valid_stars = int(residual_min_valid_stars)
-        if self.residual_min_valid_stars <= 0:
-            raise ValueError('residual_min_valid_stars must be positive')
+        self.residual_min_valid_samples = int(residual_min_valid_samples)
+        if self.residual_min_valid_samples <= 0:
+            raise ValueError('residual_min_valid_samples must be positive')
 
-        self.constrain_linked_centers = bool(constrain_linked_centers)
-        self.constrain_linked_fluxes = bool(constrain_linked_fluxes)
-        self.excluded_linked_star_ids = tuple(
-            int(idx) for idx in excluded_linked_star_ids)
+        if isinstance(calibrate_ppe, str):
+            calibrate_ppe = (calibrate_ppe,)
+        try:
+            calibrate_ppe = tuple(calibrate_ppe)
+        except TypeError as exc:
+            raise TypeError('calibrate_ppe must be an iterable containing '
+                            "'Flux' and/or 'Position'") from exc
+
+        allowed_ppe = {'Flux', 'Position'}
+        invalid_ppe = [item for item in calibrate_ppe if item not in allowed_ppe]
+        if invalid_ppe:
+            raise ValueError("calibrate_ppe entries must be 'Flux' and/or "
+                             "'Position'")
+        self.calibrate_ppe = tuple(dict.fromkeys(calibrate_ppe))
+
+        if isinstance(constrain_stars, str):
+            constrain_stars = (constrain_stars,)
+        try:
+            constrain_stars = tuple(constrain_stars)
+        except TypeError as exc:
+            raise TypeError('constrain_stars must be an iterable containing '
+                            "'Flux' and/or 'Position'") from exc
+
+        allowed_constraints = {'Flux', 'Position'}
+        invalid_constraints = [item for item in constrain_stars
+                               if item not in allowed_constraints]
+        if invalid_constraints:
+            raise ValueError("constrain_stars entries must be 'Flux' and/or "
+                             "'Position'")
+        self.constrain_stars = tuple(dict.fromkeys(constrain_stars))
+
         self.plot_diagnostics = bool(plot_diagnostics)
-        self.apply_ppe_corrections = bool(apply_ppe_corrections)
-        self.update_trust_map = bool(update_trust_map)
+        self.trust_map_floor = 1.0e-6
 
-        self.trust_map_floor = float(trust_map_floor)
-        if self.trust_map_floor <= 0.0:
-            raise ValueError('trust_map_floor must be positive')
+        if (residual_star_rms_clip is not None
+                and residual_star_rms_clip <= 0):
+            raise ValueError('residual_star_rms_clip must be positive or None')
+        self.residual_star_rms_clip = residual_star_rms_clip
 
-        if ppe_degree is None:
-            ppe_degree = self.degree
-        self.ppe_degree = int(ppe_degree)
-        if self.ppe_degree not in (0, 1, 2):
-            raise ValueError('ppe_degree must be 0, 1, or 2')
+        self.ppe_degree = self.degree
+        self.ppe_supersampling = self.oversampling
+        self.ppe_min_valid_samples = self.residual_min_valid_samples
 
-        if ppe_supersampling is None:
-            ppe_supersampling = self.oversampling
-        self.ppe_supersampling = as_pair('ppe_supersampling',
-                                         ppe_supersampling,
-                                         lower_bound=(1, 1))
-
-        self.ppe_min_valid_samples = int(ppe_min_valid_samples)
-        if self.ppe_min_valid_samples <= 0:
-            raise ValueError('ppe_min_valid_samples must be positive')
-
-        if sigma_clip is None:
-            sigma_clip = create_default_sigmaclip(sigma=3.0, maxiters=10)
-        if not isinstance(sigma_clip, SigmaClip):
-            raise TypeError('sigma_clip must be a SigmaClip instance')
-        self._sigma_clip = sigma_clip
+        if (residual_outlier_clip is not None
+                and residual_outlier_clip <= 0):
+            raise ValueError('residual_outlier_clip must be positive or None')
+        self.residual_outlier_clip = residual_outlier_clip
+        self._sigma_clip = None if residual_outlier_clip is None else SigmaClip(
+            sigma=float(residual_outlier_clip), maxiters=10)
 
         self.smoothing_kernel = smoothing_kernel
         self.residual_smoothing_kernel = residual_smoothing_kernel
@@ -787,6 +866,61 @@ class SpatialEPSFBuilder:
         self._models = []
         self._ppe_models = []
         self.final_ppe_model = None
+
+    def _set_detector_geometry(self, detector_shape, detector_origin,
+                               detector_span):
+        self.detector_shape = as_pair('detector_shape', detector_shape,
+                                      lower_bound=(2, 2))
+        self.detector_origin = np.asanyarray(detector_origin, dtype=float)
+        self.detector_span = np.asanyarray(detector_span, dtype=float)
+
+    def _resolve_detector_geometry(self, stars, *, init_model=None):
+        """
+        Resolve the detector-coordinate normalization used by the
+        spatial polynomial basis.
+        """
+        if self._detector_shape_explicit:
+            if self.detector_origin is None:
+                self.detector_origin = np.zeros(2, dtype=float)
+            if self.detector_span is None:
+                self.detector_span = self.detector_shape - 1
+            return
+
+        if init_model is not None:
+            detector_origin = getattr(init_model, 'detector_origin',
+                                      np.zeros(2, dtype=float))
+            detector_span = getattr(init_model, 'detector_span',
+                                    init_model.detector_shape - 1)
+            self._set_detector_geometry(init_model.detector_shape,
+                                        detector_origin, detector_span)
+            return
+
+        det_results = self._collect_detector_position_results(stars)
+        det_x = np.asarray(det_results['det_x'], dtype=float)
+        det_y = np.asarray(det_results['det_y'], dtype=float)
+        valid = np.isfinite(det_x) & np.isfinite(det_y)
+        if np.count_nonzero(valid) == 0:
+            raise ValueError('No valid detector-position samples were found')
+
+        xmin = np.nanmin(det_x[valid])
+        xmax = np.nanmax(det_x[valid])
+        ymin = np.nanmin(det_y[valid])
+        ymax = np.nanmax(det_y[valid])
+
+        xspan = xmax - xmin
+        yspan = ymax - ymin
+        xorigin = xmin
+        yorigin = ymin
+        if xspan <= 0.0:
+            xspan = 1.0
+            xorigin = xmin - 0.5 * xspan
+        if yspan <= 0.0:
+            yspan = 1.0
+            yorigin = ymin - 0.5 * yspan
+
+        detector_shape = (int(np.ceil(yspan)) + 1, int(np.ceil(xspan)) + 1)
+        self._set_detector_geometry(detector_shape, (yorigin, xorigin),
+                                    (yspan, xspan))
 
     def _log(self, message):
         """
@@ -801,34 +935,11 @@ class SpatialEPSFBuilder:
         of the members within each linked group.
         """
         constrained = copy.deepcopy(stars)
-        if self.constrain_linked_centers:
+        if 'Position' in self.constrain_stars:
             constrained.constrain_linked_centres()
-        if self.constrain_linked_fluxes:
+        if 'Flux' in self.constrain_stars:
             constrained.constrain_linked_fluxes()
         return constrained
-
-    def _exclude_configured_linked_stars(self, stars):
-        """
-        Exclude configured linked-star groups from fitting.
-
-        The group IDs correspond to the order of `LinkedEPSFStar`
-        objects in the top-level `EPSFStars` container, matching the
-        linked-star IDs used in the diagnostics.
-        """
-        if len(self.excluded_linked_star_ids) == 0:
-            return stars
-
-        excluded = copy.deepcopy(stars)
-        linked_id = 0
-        for item in excluded:
-            if not isinstance(item, LinkedEPSFStar):
-                continue
-            if linked_id in self.excluded_linked_star_ids:
-                for star in item.all_stars:
-                    star._excluded_from_fit = True
-            linked_id += 1
-
-        return excluded
 
     def _make_empty_ppe_model(self):
         nbasis = len(SpatialEPSFModel._basis_labels_for_degree(
@@ -838,7 +949,9 @@ class SpatialEPSFBuilder:
         return SpatialPPEMapModel(zeros, zeros.copy(), zeros.copy(),
                                   supersampling=self.ppe_supersampling,
                                   detector_shape=self.detector_shape,
-                                  degree=self.ppe_degree)
+                                  degree=self.ppe_degree,
+                                  detector_origin=self.detector_origin,
+                                  detector_span=self.detector_span)
 
     @staticmethod
     def _make_smoothing_kernel(kernel):
@@ -914,8 +1027,11 @@ class SpatialEPSFBuilder:
         return SpatialEPSFModel(coeff_data, oversampling=self.oversampling,
                                 detector_shape=self.detector_shape,
                                 degree=self.degree,
-                                normalize_local_epsf=self.normalize_local_epsf,
-                                trust_map=None)
+                                detector_origin=self.detector_origin,
+                                detector_span=self.detector_span,
+                                normalize_local_epsf=self.normalise_epsf,
+                                trust_map=None,
+                                epsf_class=self.epsf_class)
 
     def _compute_trust_map_from_residuals(self, residuals, weights):
         """
@@ -1049,6 +1165,76 @@ class SpatialEPSFBuilder:
 
         return residuals, weights, x_coords, y_coords, det_x, det_y, group_id
 
+    @staticmethod
+    def _mad_std(data):
+        data = np.asanyarray(data, dtype=float)
+        median = np.nanmedian(data)
+        mad = np.nanmedian(np.abs(data - median))
+        return 1.482602218505602 * mad
+
+    def _select_residual_stars(self, stars, spatial_model):
+        """
+        Exclude whole stars from the residual stack using a robust RMS
+        clip against the current spatial ePSF model.
+        """
+        if self.residual_star_rms_clip is None:
+            return copy.deepcopy(stars)
+
+        selected = copy.deepcopy(stars)
+        good_stars = selected.all_good_stars
+        if len(good_stars) == 0:
+            return selected
+
+        rms_values = []
+        for star in good_stars:
+            local_epsf = spatial_model.make_image_psf(star.center[0],
+                                                      star.center[1])
+            residual = star.compute_residual_image(local_epsf)
+            residual = residual / max(star.flux, 1.0e-12)
+            residual = residual[~star.mask]
+            residual = residual[np.isfinite(residual)]
+            if residual.size == 0:
+                rms_values.append(np.nan)
+            else:
+                rms_values.append(np.sqrt(np.nanmean(residual**2)))
+
+        rms_values = np.asarray(rms_values, dtype=float)
+        valid = np.isfinite(rms_values)
+        if np.count_nonzero(valid) < 3:
+            return selected
+
+        center = np.nanmedian(rms_values[valid])
+        scale = self._mad_std(rms_values[valid])
+        if not np.isfinite(scale) or scale == 0.0:
+            return selected
+
+        threshold = center + self.residual_star_rms_clip * scale
+        for star, rms in zip(good_stars, rms_values, strict=True):
+            if not np.isfinite(rms) or rms > threshold:
+                star._excluded_from_fit = True
+
+        if selected.n_good_stars == 0:
+            return copy.deepcopy(stars)
+        return selected
+
+    @staticmethod
+    def _auto_quadratic_offset_core_size(shape):
+        """
+        Infer the quadratic-offset core size from the oversampled ePSF
+        grid shape using roughly one-third of the footprint in each
+        dimension, forced to odd values with a minimum of 3.
+        """
+        shape = np.asanyarray(shape, dtype=int)
+        if shape.shape != (2,):
+            raise ValueError('shape must have shape (2,)')
+
+        core = np.rint(shape / 3.0).astype(int)
+        core = np.maximum(core, 3)
+        core = np.where(core % 2 == 0, core + 1, core)
+        max_core = np.where(shape % 2 == 0, shape - 1, shape)
+        max_core = np.maximum(max_core, 3)
+        return np.minimum(core, max_core)
+
     def _fit_residual_coefficients(self, residuals, det_x, det_y,
                                    x_coords=None, y_coords=None):
         """
@@ -1064,14 +1250,20 @@ class SpatialEPSFBuilder:
         basis = SpatialEPSFModel(np.zeros((nbasis, 3, 3)),
                                  oversampling=self.oversampling,
                                  detector_shape=self.detector_shape,
-                                 degree=self.degree).basis_vector(det_x, det_y)
+                                 degree=self.degree,
+                                 detector_origin=self.detector_origin,
+                                 detector_span=self.detector_span,
+                                 epsf_class=self.epsf_class).basis_vector(
+                                     det_x, det_y)
         _, ny, nx = residuals.shape
         coeff_update = np.zeros((nbasis, ny, nx), dtype=float)
         use_offsets = x_coords is not None and y_coords is not None
         xcenter = nx // 2
         ycenter = ny // 2
-        half_core_x = self.quadratic_offset_core_size[1] // 2
-        half_core_y = self.quadratic_offset_core_size[0] // 2
+        quadratic_offset_core_size = self._auto_quadratic_offset_core_size(
+            (ny, nx))
+        half_core_x = quadratic_offset_core_size[1] // 2
+        half_core_y = quadratic_offset_core_size[0] // 2
 
         for iy in range(ny):
             for ix in range(nx):
@@ -1081,7 +1273,7 @@ class SpatialEPSFBuilder:
                     dx = x_coords[:, iy, ix]
                     dy = y_coords[:, iy, ix]
                     valid &= np.isfinite(dx) & np.isfinite(dy)
-                if np.count_nonzero(valid) < self.residual_min_valid_stars:
+                if np.count_nonzero(valid) < self.residual_min_valid_samples:
                     continue
 
                 z_valid = z[valid]
@@ -1093,13 +1285,16 @@ class SpatialEPSFBuilder:
                         dx_valid, dy_valid, ix, iy, nx, ny)
                     design = np.column_stack((design, *offset_terms))
 
-                clipped = self._sigma_clip(z_valid, axis=0, masked=True,
-                                           return_bounds=False)
-                keep = ~clipped.mask
-                z_fit = clipped.data[keep]
-                design = design[keep]
+                if self._sigma_clip is not None:
+                    clipped = self._sigma_clip(z_valid, axis=0, masked=True,
+                                               return_bounds=False)
+                    keep = ~clipped.mask
+                    z_fit = clipped.data[keep]
+                    design = design[keep]
+                else:
+                    z_fit = z_valid
 
-                if z_fit.size < self.residual_min_valid_stars:
+                if z_fit.size < self.residual_min_valid_samples:
                     continue
 
                 coeffs, _, _, _ = np.linalg.lstsq(design, z_fit, rcond=None)
@@ -1115,8 +1310,10 @@ class SpatialEPSFBuilder:
         offset_terms = [dx, dy]
         xcenter = nx // 2
         ycenter = ny // 2
-        half_core_x = self.quadratic_offset_core_size[1] // 2
-        half_core_y = self.quadratic_offset_core_size[0] // 2
+        quadratic_offset_core_size = self._auto_quadratic_offset_core_size(
+            (ny, nx))
+        half_core_x = quadratic_offset_core_size[1] // 2
+        half_core_y = quadratic_offset_core_size[0] // 2
         in_core = (abs(ix - xcenter) <= half_core_x
                    and abs(iy - ycenter) <= half_core_y)
         if in_core:
@@ -1133,7 +1330,11 @@ class SpatialEPSFBuilder:
         basis = SpatialEPSFModel(np.zeros((nbasis, 3, 3)),
                                  oversampling=self.oversampling,
                                  detector_shape=self.detector_shape,
-                                 degree=self.degree).basis_vector(det_x, det_y)
+                                 degree=self.degree,
+                                 detector_origin=self.detector_origin,
+                                 detector_span=self.detector_span,
+                                 epsf_class=self.epsf_class).basis_vector(
+                                     det_x, det_y)
         _, ny, nx = residuals.shape
         mismatch = np.full_like(residuals, np.nan, dtype=float)
 
@@ -1143,7 +1344,7 @@ class SpatialEPSFBuilder:
                 dx = x_coords[:, iy, ix]
                 dy = y_coords[:, iy, ix]
                 valid = (np.isfinite(z) & np.isfinite(dx) & np.isfinite(dy))
-                if np.count_nonzero(valid) < self.residual_min_valid_stars:
+                if np.count_nonzero(valid) < self.residual_min_valid_samples:
                     continue
 
                 z_valid = z[valid]
@@ -1154,12 +1355,16 @@ class SpatialEPSFBuilder:
                     (design, *self._residual_offset_terms(dx_valid, dy_valid,
                                                           ix, iy, nx, ny)))
 
-                clipped = self._sigma_clip(z_valid, axis=0, masked=True,
-                                           return_bounds=False)
-                keep = ~clipped.mask
-                z_fit = clipped.data[keep]
-                design_fit = design[keep]
-                if z_fit.size < self.residual_min_valid_stars:
+                if self._sigma_clip is not None:
+                    clipped = self._sigma_clip(z_valid, axis=0, masked=True,
+                                               return_bounds=False)
+                    keep = ~clipped.mask
+                    z_fit = clipped.data[keep]
+                    design_fit = design[keep]
+                else:
+                    z_fit = z_valid
+                    design_fit = design
+                if z_fit.size < self.residual_min_valid_samples:
                     continue
 
                 coeffs, _, _, _ = np.linalg.lstsq(design_fit, z_fit, rcond=None)
@@ -1177,31 +1382,115 @@ class SpatialEPSFBuilder:
             result[i] = convolve(coeff_data[i], self._smooth_kernel)
         return result
 
+    def _shift_oversampled_image(self, data, *, dx, dy, origin=None,
+                                 fill_value=0.0):
+        """
+        Shift an oversampled image by ``(dx, dy)`` detector pixels.
+        """
+        image_psf = self.epsf_class(data=np.asanyarray(data, dtype=float),
+                                    oversampling=self.oversampling,
+                                    origin=origin, fill_value=fill_value)
+        y, x = np.indices(image_psf.data.shape, dtype=float)
+        x /= image_psf.oversampling[1]
+        y /= image_psf.oversampling[0]
+        return image_psf.evaluate(x=x, y=y, flux=1.0, x_0=-dx, y_0=-dy)
+
+    def _measure_recentering_shift(self, coeff_data, sample_positions):
+        """
+        Measure a common recentering shift from a representative local
+        ePSF built at the median sampled detector position.
+        """
+        if len(sample_positions) == 0:
+            return 0.0, 0.0
+
+        sample_positions = np.asanyarray(sample_positions, dtype=float)
+        xref = float(np.nanmedian(sample_positions[:, 0]))
+        yref = float(np.nanmedian(sample_positions[:, 1]))
+        spatial_model = SpatialEPSFModel(
+            coeff_data, oversampling=self.oversampling,
+            detector_shape=self.detector_shape, degree=self.degree,
+            origin=None, fill_value=0.0,
+            detector_origin=self.detector_origin,
+            detector_span=self.detector_span,
+            normalize_local_epsf=self.normalise_epsf,
+            epsf_class=self.epsf_class)
+        local_epsf = spatial_model.make_image_psf(xref, yref)
+        epsf_data = np.array(local_epsf.data, copy=True)
+
+        box_size = np.rint((np.asarray(epsf_data.shape, dtype=float) - 1.0)
+                           / np.asarray(self.oversampling,
+                                        dtype=float)).astype(int)
+        box_size = np.maximum(box_size, 3)
+        box_size = np.where(box_size % 2 == 0, box_size + 1, box_size)
+
+        xcenter, ycenter = local_epsf.origin
+        y, x = np.indices(epsf_data.shape, dtype=float)
+        x /= self.oversampling[1]
+        y /= self.oversampling[0]
+
+        dx_total = 0.0
+        dy_total = 0.0
+        maxiters = 10
+        center_dist_sq = self.center_accuracy_sq + 1.0e6
+        center_dist_sq_prev = center_dist_sq + 1.0
+        iter_num = 0
+
+        while iter_num < maxiters and center_dist_sq >= self.center_accuracy_sq:
+            iter_num += 1
+            slices_large, _ = overlap_slices(
+                epsf_data.shape, box_size * self.oversampling,
+                (ycenter, xcenter))
+            epsf_cutout = epsf_data[slices_large]
+            mask = ~np.isfinite(epsf_cutout)
+            xcenter_new, ycenter_new = centroid_com(epsf_cutout, mask=mask)
+            xcenter_new += slices_large[1].start
+            ycenter_new += slices_large[0].start
+
+            dx = (xcenter_new - xcenter) / self.oversampling[1]
+            dy = (ycenter_new - ycenter) / self.oversampling[0]
+            center_dist_sq = dx**2 + dy**2
+            if center_dist_sq >= center_dist_sq_prev:
+                break
+            center_dist_sq_prev = center_dist_sq
+
+            dx_total += dx
+            dy_total += dy
+            epsf_data = local_epsf.evaluate(x=x, y=y, flux=1.0,
+                                            x_0=-dx_total, y_0=-dy_total)
+
+        return dx_total, dy_total
+
+    def _recenter_coefficients(self, coeff_data, sample_positions):
+        """
+        Apply a common recentering shift to every spatial coefficient
+        image.
+        """
+        dx, dy = self._measure_recentering_shift(coeff_data, sample_positions)
+        if dx == 0.0 and dy == 0.0:
+            return coeff_data
+
+        result = np.empty_like(coeff_data)
+        for i in range(coeff_data.shape[0]):
+            result[i] = self._shift_oversampled_image(coeff_data[i], dx=dx,
+                                                      dy=dy)
+        return result
+
     def _normalise_coefficients(self, coeff_data, sample_positions):
         if not self.normalise_epsf or len(sample_positions) == 0:
             return coeff_data
 
-        totals = []
+        sample_positions = np.asanyarray(sample_positions, dtype=float)
+        xref = float(np.nanmedian(sample_positions[:, 0]))
+        yref = float(np.nanmedian(sample_positions[:, 1]))
         model = SpatialEPSFModel(coeff_data, oversampling=self.oversampling,
                                  detector_shape=self.detector_shape,
                                  degree=self.degree,
-                                 normalize_local_epsf=self.normalize_local_epsf)
-        for x, y in sample_positions:
-            local_epsf = model.make_image_psf(x, y)
-            box_size = np.asarray(self._norm_radius, dtype=int)
-            if box_size.ndim == 0:
-                box_size = np.array((box_size, box_size))
-            box_size = as_pair('box_size', box_size, lower_bound=(3, 3),
-                               check_odd=False)
-            half_x = int(np.floor(box_size[1] / 2))
-            half_y = int(np.floor(box_size[0] / 2))
-            norm_x = np.arange(-half_x, half_x + 1)
-            norm_y = np.arange(-half_y, half_y + 1)
-            yy, xx = np.meshgrid(norm_y, norm_x)
-            vals = local_epsf.evaluate(x=xx, y=yy, flux=1.0, x_0=0.0, y_0=0.0)
-            totals.append(np.nansum(vals))
-
-        scale = np.nanmedian(totals)
+                                 detector_origin=self.detector_origin,
+                                 detector_span=self.detector_span,
+                                 normalize_local_epsf=False,
+                                 epsf_class=self.epsf_class)
+        local_data = model.local_epsf_data(xref, yref)
+        scale = model._local_epsf_normalization(local_data)
         if np.isfinite(scale) and scale > 0.0:
             coeff_data = coeff_data / scale
         return coeff_data
@@ -1628,7 +1917,10 @@ class SpatialEPSFBuilder:
         basis = SpatialEPSFModel(np.zeros((nbasis, 3, 3)),
                                  oversampling=(1, 1),
                                  detector_shape=self.detector_shape,
-                                 degree=self.ppe_degree).basis_vector(
+                                 degree=self.ppe_degree,
+                                 detector_origin=self.detector_origin,
+                                 detector_span=self.detector_span,
+                                 epsf_class=self.epsf_class).basis_vector(
                                      det_x, det_y)
 
         xbin = np.floor(subpixel_x * self.ppe_supersampling[1]).astype(int)
@@ -1645,11 +1937,14 @@ class SpatialEPSFBuilder:
 
                 z_valid = values[mask]
                 design = basis[:, mask].T
-                clipped = self._sigma_clip(z_valid, axis=0, masked=True,
-                                           return_bounds=False)
-                keep = ~clipped.mask
-                z_fit = clipped.data[keep]
-                design = design[keep]
+                if self._sigma_clip is not None:
+                    clipped = self._sigma_clip(z_valid, axis=0, masked=True,
+                                               return_bounds=False)
+                    keep = ~clipped.mask
+                    z_fit = clipped.data[keep]
+                    design = design[keep]
+                else:
+                    z_fit = z_valid
                 if z_fit.size < self.ppe_min_valid_samples:
                     continue
 
@@ -1662,7 +1957,7 @@ class SpatialEPSFBuilder:
         """
         Fit detector-position-dependent PPE maps from raw fitted stars.
         """
-        if not self.apply_ppe_corrections:
+        if len(self.calibrate_ppe) == 0:
             return self._make_empty_ppe_model()
 
         residual_results = self._collect_ppe_residual_results(stars)
@@ -1687,13 +1982,17 @@ class SpatialEPSFBuilder:
         return SpatialPPEMapModel(flux_coeff, x_coeff, y_coeff,
                                   supersampling=self.ppe_supersampling,
                                   detector_shape=self.detector_shape,
-                                  degree=self.ppe_degree)
+                                  degree=self.ppe_degree,
+                                  detector_origin=self.detector_origin,
+                                  detector_span=self.detector_span)
 
     def _apply_spatial_ppe_corrections(self, stars, spatial_ppe_model):
         """
         Apply spatially varying PPE corrections to fitted stars.
         """
-        if not self.apply_ppe_corrections:
+        apply_flux = 'Flux' in self.calibrate_ppe
+        apply_position = 'Position' in self.calibrate_ppe
+        if not apply_flux and not apply_position:
             return copy.deepcopy(stars)
 
         corrected = copy.deepcopy(stars)
@@ -1701,9 +2000,11 @@ class SpatialEPSFBuilder:
             corrected_flux, corrected_x, corrected_y = spatial_ppe_model(
                 star.flux, star.center[0], star.center[1],
                 det_x=star.center[0], det_y=star.center[1])
-            star.flux = corrected_flux
-            star.cutout_center = np.array((corrected_x, corrected_y),
-                                          dtype=float) - star.origin
+            if apply_flux:
+                star.flux = corrected_flux
+            if apply_position:
+                star.cutout_center = np.array((corrected_x, corrected_y),
+                                              dtype=float) - star.origin
 
         return corrected
 
@@ -1750,7 +2051,10 @@ class SpatialEPSFBuilder:
         residual_model = SpatialEPSFModel(
             coeff_update, oversampling=self.oversampling,
             detector_shape=self.detector_shape, degree=self.degree,
-            normalize_local_epsf=self.normalize_local_epsf)
+            detector_origin=self.detector_origin,
+            detector_span=self.detector_span,
+            normalize_local_epsf=self.normalise_epsf,
+            epsf_class=self.epsf_class)
 
         fig_model, axes_model = plt.subplots(3, 3, figsize=(12, 11),
                                              constrained_layout=True)
@@ -1890,14 +2194,19 @@ class SpatialEPSFBuilder:
             oversampling=self.oversampling,
             detector_shape=self.detector_shape,
             degree=self.degree,
-            normalize_local_epsf=self.normalize_local_epsf)
+            detector_origin=self.detector_origin,
+            detector_span=self.detector_span,
+            normalize_local_epsf=self.normalise_epsf,
+            epsf_class=self.epsf_class)
         sample_basis = basis_model.basis_vector(xdata, ydata).T
         surface_basis = basis_model.basis_vector(xx, yy)
 
         xcenter = residuals.shape[2] // 2
         ycenter = residuals.shape[1] // 2
-        half_core_x = self.quadratic_offset_core_size[1] // 2
-        half_core_y = self.quadratic_offset_core_size[0] // 2
+        quadratic_offset_core_size = self._auto_quadratic_offset_core_size(
+            residuals.shape[1:])
+        half_core_x = quadratic_offset_core_size[1] // 2
+        half_core_y = quadratic_offset_core_size[0] // 2
         in_core = (abs(ix - xcenter) <= half_core_x
                    and abs(iy - ycenter) <= half_core_y)
 
@@ -1907,20 +2216,24 @@ class SpatialEPSFBuilder:
             offset_terms.extend((dxdata**2, dxdata * dydata, dydata**2))
         design = np.column_stack((design, *offset_terms))
 
-        clipped = self._sigma_clip(zdata, axis=0, masked=True,
-                                   return_bounds=False)
-        keep = ~clipped.mask
-        z_fit = clipped.data[keep]
-        design_fit = design[keep]
-        xdata = xdata[keep]
-        ydata = ydata[keep]
-        zdata = zdata[keep]
-        gid = gid[keep]
-        dxdata = dxdata[keep]
-        dydata = dydata[keep]
-        point_metric = point_metric[keep]
+        if self._sigma_clip is not None:
+            clipped = self._sigma_clip(zdata, axis=0, masked=True,
+                                       return_bounds=False)
+            keep = ~clipped.mask
+            z_fit = clipped.data[keep]
+            design_fit = design[keep]
+            xdata = xdata[keep]
+            ydata = ydata[keep]
+            zdata = zdata[keep]
+            gid = gid[keep]
+            dxdata = dxdata[keep]
+            dydata = dydata[keep]
+            point_metric = point_metric[keep]
+        else:
+            z_fit = zdata
+            design_fit = design
 
-        if z_fit.size < self.residual_min_valid_stars:
+        if z_fit.size < self.residual_min_valid_samples:
             return
 
         coeffs, _, _, _ = np.linalg.lstsq(design_fit, z_fit, rcond=None)
@@ -2086,27 +2399,6 @@ class SpatialEPSFBuilder:
         rms_fig.suptitle(f'Iteration {iter_num}: Residual-model RMS per Grid Section (Split by Detector Region)', fontsize=14)
         plt.show()
 
-        # Make separate plots showing the residual-model mean and RMS per grisection but for each individual star id label
-        unique_ids = np.unique(group_id)
-        for id_label in unique_ids:
-            unique_star_mask = group_id == id_label
-            if np.count_nonzero(unique_star_mask) == 0:
-                continue
-            star_fig, star_axes = plt.subplots(1, 2, figsize=(14, 6), constrained_layout=True)
-            star_mean = np.nanmean(mismatch[unique_star_mask], axis=0)
-            star_rms = np.sqrt(np.nanmean(mismatch[unique_star_mask]**2, axis=0))
-            im_mean = star_axes[0].imshow(star_mean, origin='lower', cmap='magma')
-            im_rms = star_axes[1].imshow(star_rms, origin='lower', cmap='magma')
-            star_axes[0].set_title(f'Iteration {iter_num}: Residual-model Mean per Grid Section for Star ID {id_label}')
-            star_axes[0].set_xlabel('Oversampled X')
-            star_axes[0].set_ylabel('Oversampled Y')
-            star_fig.colorbar(im_mean, ax=star_axes[0])
-            star_axes[1].set_title(f'Iteration {iter_num}: Residual-model RMS per Grid Section for Star ID {id_label}')
-            star_axes[1].set_xlabel('Oversampled X')
-            star_axes[1].set_ylabel('Oversampled Y')
-            star_fig.colorbar(im_rms, ax=star_axes[1])
-            plt.show()
-
     def build_epsf(self, stars, *, init_model=None):
         if not isinstance(stars, EPSFStars):
             raise TypeError('stars must be an EPSFStars object')
@@ -2114,7 +2406,7 @@ class SpatialEPSFBuilder:
         self._models = []
         self._ppe_models = []
         self.final_ppe_model = None
-        stars = self._exclude_configured_linked_stars(stars)
+        self._resolve_detector_geometry(stars, init_model=init_model)
         self._log('SpatialEPSFBuilder: creating initial spatial model')
         if self.plot_diagnostics:
             self._log('SpatialEPSFBuilder: plotting sample distribution')
@@ -2149,19 +2441,20 @@ class SpatialEPSFBuilder:
             fitted_stars = self._apply_linked_constraints(
                 fitted_stars_corrected)
 
+            self._log(f'SpatialEPSFBuilder: iteration {iter_num} selecting '
+                      'stars for residual stack')
+            residual_stars = self._select_residual_stars(fitted_stars,
+                                                         spatial_model)
+
             self._log(f'SpatialEPSFBuilder: iteration {iter_num} resampling '
                       'residual stack')
             residuals, weights, x_coords, y_coords, det_x, det_y, group_id = (
-                self._resample_residuals(fitted_stars, spatial_model))
+                self._resample_residuals(residual_stars, spatial_model))
 
-            trust_map = None
-            if self.update_trust_map:
-                self._log(f'SpatialEPSFBuilder: iteration {iter_num} '
-                          'computing trust map from residual RMS')
-                trust_map = self._compute_trust_map_from_residuals(
-                    residuals, weights)
-            else:
-                trust_map = getattr(spatial_model, 'trust_map', None)
+            self._log(f'SpatialEPSFBuilder: iteration {iter_num} '
+                      'computing trust map from residual RMS')
+            trust_map = self._compute_trust_map_from_residuals(
+                residuals, weights)
 
             # Collapse star stack to a detector-position-dependent residual
             # coefficient update for each oversampled grid point.
@@ -2200,11 +2493,18 @@ class SpatialEPSFBuilder:
                       'coefficient images')
             coeff_data = self._smooth_coefficients(coeff_data)
 
+            sample_positions = list(zip(det_x, det_y, strict=True))
+
+            if self.recenter_epsf:
+                self._log(f'SpatialEPSFBuilder: iteration {iter_num} '
+                          'recentering spatial ePSF')
+                coeff_data = self._recenter_coefficients(coeff_data,
+                                                         sample_positions)
+
             self._log(f'SpatialEPSFBuilder: iteration {iter_num} normalizing '
                       'spatial ePSF')
             coeff_data = self._normalise_coefficients(coeff_data,
-                                                      list(zip(det_x, det_y,
-                                                               strict=True)))
+                                                      sample_positions)
 
             self._log(f'SpatialEPSFBuilder: iteration {iter_num} rebuilding '
                       'spatial model object')
@@ -2213,8 +2513,11 @@ class SpatialEPSFBuilder:
                 detector_shape=self.detector_shape, degree=self.degree,
                 origin=spatial_model.origin,
                 fill_value=spatial_model.fill_value,
-                normalize_local_epsf=self.normalize_local_epsf,
-                trust_map=trust_map)
+                detector_origin=self.detector_origin,
+                detector_span=self.detector_span,
+                normalize_local_epsf=self.normalise_epsf,
+                trust_map=trust_map,
+                epsf_class=self.epsf_class)
 
             self._models.append(spatial_model)
 
