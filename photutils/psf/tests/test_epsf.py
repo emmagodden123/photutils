@@ -10,7 +10,6 @@ import pytest
 from astropy.modeling.fitting import TRFLSQFitter
 from astropy.nddata import (InverseVariance, NDData, StdDevUncertainty,
                             VarianceUncertainty)
-from astropy.stats import SigmaClip
 from astropy.table import Table
 from astropy.utils.exceptions import AstropyUserWarning
 from numpy.testing import assert_allclose
@@ -111,8 +110,7 @@ class TestEPSFBuild:
                               epsf_test_data['init_stars'][:10],
                               size=shape)
         epsf_builder = EPSFBuilder(oversampling=oversampling, maxiters=5,
-                                   progress_bar=False, norm_radius=10,
-                                   recentering_maxiters=5)
+                                   progress_bar=False)
         epsf, fitted_stars = epsf_builder(stars)
 
         ref_size = np.array(shape) * oversampling + 1
@@ -142,8 +140,7 @@ class TestEPSFBuild:
                               size=size)
 
         epsf_builder = EPSFBuilder(oversampling=oversampling, maxiters=8,
-                                   progress_bar=True, norm_radius=25,
-                                   recentering_maxiters=5,
+                                   progress_bar=True,
                                    fitter=EPSFFitter(fit_boxsize=31),
                                    smoothing_kernel='quadratic')
 
@@ -209,12 +206,12 @@ def test_epsfbuilder_inputs():
     match = 'oversampling must be > 0'
     with pytest.raises(ValueError, match=match):
         EPSFBuilder(oversampling=[-1, 4])
-    match = 'flux_ppe_damping must be in the range \\[0, 1\\]'
+    match = "calibrate_ppe entries must be 'Flux' and/or 'Position'"
     with pytest.raises(ValueError, match=match):
-        EPSFBuilder(flux_ppe_damping=1.5)
-    match = 'flux_ppe_update_every must be a positive integer'
+        EPSFBuilder(calibrate_ppe=('Flux', 'Bad'))
+    match = "constrain_stars entries must be 'Flux' and/or 'Position'"
     with pytest.raises(ValueError, match=match):
-        EPSFBuilder(flux_ppe_update_every=0)
+        EPSFBuilder(constrain_stars=('Flux', 'Bad'))
     match = 'residual_star_rms_clip must be positive or None'
     with pytest.raises(ValueError, match=match):
         EPSFBuilder(residual_star_rms_clip=0)
@@ -224,36 +221,81 @@ def test_epsfbuilder_inputs():
     match = 'residual_min_valid_samples must be a positive integer'
     with pytest.raises(ValueError, match=match):
         EPSFBuilder(residual_min_valid_samples=0)
-    match = r'residual_update_fraction must be in the range \(0, 1\]'
-    with pytest.raises(ValueError, match=match):
-        EPSFBuilder(residual_update_fraction=0.0)
-    match = 'residual_despike_threshold must be a positive number'
-    with pytest.raises(ValueError, match=match):
-        EPSFBuilder(residual_despike_threshold=0.0)
-    match = 'residual_despike_passes must be a positive integer'
-    with pytest.raises(ValueError, match=match):
-        EPSFBuilder(residual_despike_passes=0)
-    match = "residual_despike_mode must be 'threshold' or 'strict'"
-    with pytest.raises(ValueError, match=match):
-        EPSFBuilder(residual_despike_mode='invalid')
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(convergence_mode='model')
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(center_convergence_percentile=90.0)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(mask_background_pixels=False)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(recentering_func=lambda data, mask=None: (0.0, 0.0))
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(recentering_maxiters=5)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(recentering_boxsize=(5, 5))
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(norm_radius=10)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(epsf_nonnegative=False)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(apply_position_ppe=False)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(apply_flux_ppe=False)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(apply_final_flux_ppe=False)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(plot_ppe_diagnostics=False)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(sigma_clip=None)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(residual_update_fraction=0.25)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(residual_despike_threshold=3.0)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(residual_despike_boxsize=5)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(residual_despike_passes=3)
+    with pytest.raises(TypeError, match='unexpected keyword argument'):
+        EPSFBuilder(residual_despike_mode='strict')
 
     # valid inputs
-    EPSFBuilder(oversampling=6)
+    builder = EPSFBuilder(oversampling=6)
     EPSFBuilder(oversampling=[4, 6])
-    EPSFBuilder(flux_ppe_damping=0.25, flux_ppe_update_every=3)
+    EPSFBuilder(recenter_epsf=False)
+    EPSFBuilder(clip_negative=False)
+    EPSFBuilder(calibrate_ppe=('Position',))
+    EPSFBuilder(constrain_stars=('Position',))
+    EPSFBuilder(plot_diagnostics=False)
     EPSFBuilder(residual_star_rms_clip=None, residual_outlier_clip=3.0,
-                residual_min_valid_samples=3, residual_update_fraction=0.25,
-                residual_despike_boxsize=5, residual_despike_passes=3,
-                residual_despike_mode='strict')
-
-    # invalid inputs
-    for sigma_clip in [None, [], 'a']:
-        match = 'sigma_clip must be an astropy.stats.SigmaClip instance'
-        with pytest.raises(TypeError, match=match):
-            EPSFBuilder(sigma_clip=sigma_clip)
-
-    # valid inputs
-    EPSFBuilder(sigma_clip=SigmaClip(sigma=2.5, cenfunc='mean', maxiters=2))
+                residual_min_valid_samples=3, residual_despike=False)
+    assert not hasattr(builder, 'convergence_mode')
+    assert not hasattr(builder, 'center_convergence_percentile')
+    assert not hasattr(builder, 'epsf_change_tolerance')
+    assert not hasattr(builder, 'residual_change_tolerance')
+    assert not hasattr(builder, 'convergence_stable_iters')
+    assert not hasattr(builder, 'mask_background_pixels')
+    assert not hasattr(builder, 'recentering_func')
+    assert not hasattr(builder, 'recentering_maxiters')
+    assert not hasattr(builder, 'recentering_boxsize')
+    assert not hasattr(builder, '_norm_radius')
+    assert not hasattr(builder, 'epsf_nonnegative')
+    assert not hasattr(builder, 'apply_position_ppe')
+    assert not hasattr(builder, 'apply_flux_ppe')
+    assert not hasattr(builder, 'apply_final_flux_ppe')
+    assert not hasattr(builder, 'plot_ppe_diagnostics')
+    assert not hasattr(builder, 'flux_ppe_damping')
+    assert not hasattr(builder, 'residual_update_fraction')
+    assert not hasattr(builder, 'residual_despike_threshold')
+    assert not hasattr(builder, 'residual_despike_boxsize')
+    assert not hasattr(builder, 'residual_despike_passes')
+    assert not hasattr(builder, 'residual_despike_mode')
+    assert not hasattr(builder, 'flux_ppe_update_every')
+    assert not hasattr(builder, '_sigma_clip')
+    assert builder.recenter_epsf is True
+    assert builder.clip_negative is True
+    assert builder.calibrate_ppe == ('Flux', 'Position')
+    assert builder.constrain_stars == ('Flux', 'Position')
+    assert builder.plot_diagnostics is True
 
 
 def test_resample_epsf_anisotropic_grid():
@@ -291,7 +333,7 @@ def test_apply_ppe_corrections_policy():
                     origin=(10, 20))
     stars = EPSFStars([star])
     builder = EPSFBuilder(oversampling=2, maxiters=1, progress_bar=False,
-                          flux_ppe_damping=0.5, flux_ppe_update_every=2)
+                          calibrate_ppe=('Flux', 'Position'))
 
     ppemap = PPEMap((2, 2),
                     np.full((2, 2), 0.2),
@@ -300,19 +342,67 @@ def test_apply_ppe_corrections_policy():
 
     corrected_iter1 = builder._apply_ppe_corrections(stars, ppemap,
                                                      iteration=1)
-    assert_allclose(corrected_iter1[0].flux, star.flux)
+    assert_allclose(corrected_iter1[0].flux, star.flux / 1.2 * 0.8
+                    + star.flux * 0.2)
     assert_allclose(corrected_iter1[0].center, (11.75, 22.5))
 
     corrected_iter2 = builder._apply_ppe_corrections(stars, ppemap,
                                                      iteration=2)
-    assert_allclose(corrected_iter2[0].flux, star.flux / 1.2 * 0.5
-                    + star.flux * 0.5)
+    assert_allclose(corrected_iter2[0].flux, star.flux / 1.2 * 0.8
+                    + star.flux * 0.2)
     assert_allclose(corrected_iter2[0].center, (11.75, 22.5))
 
     corrected_final = builder._apply_ppe_corrections(stars, ppemap,
                                                      final=True)
     assert_allclose(corrected_final[0].flux, star.flux / 1.2)
     assert_allclose(corrected_final[0].center, (11.75, 22.5))
+
+    flux_only_builder = EPSFBuilder(oversampling=2, maxiters=1,
+                                    progress_bar=False,
+                                    calibrate_ppe=('Flux',))
+    corrected_flux_only = flux_only_builder._apply_ppe_corrections(
+        stars, ppemap, final=True)
+    assert_allclose(corrected_flux_only[0].flux, star.flux / 1.2)
+    assert_allclose(corrected_flux_only[0].center, star.center)
+
+    position_only_builder = EPSFBuilder(oversampling=2, maxiters=1,
+                                        progress_bar=False,
+                                        calibrate_ppe=('Position',))
+    corrected_position_only = position_only_builder._apply_ppe_corrections(
+        stars, ppemap, final=True)
+    assert_allclose(corrected_position_only[0].flux, star.flux)
+    assert_allclose(corrected_position_only[0].center, (11.75, 22.5))
+
+
+def test_apply_linked_star_constraints_policy():
+    class DummyStars:
+        def __init__(self):
+            self.calls = []
+
+        def constrain_linked_centres(self):
+            self.calls.append('Position')
+
+        def constrain_linked_fluxes(self):
+            self.calls.append('Flux')
+
+    stars = DummyStars()
+    builder = EPSFBuilder(oversampling=2, maxiters=1, progress_bar=False,
+                          constrain_stars=('Position',))
+    returned = builder._apply_linked_star_constraints(stars)
+    assert returned is stars
+    assert stars.calls == ['Position']
+
+    stars = DummyStars()
+    builder = EPSFBuilder(oversampling=2, maxiters=1, progress_bar=False,
+                          constrain_stars=('Flux',))
+    builder._apply_linked_star_constraints(stars)
+    assert stars.calls == ['Flux']
+
+    stars = DummyStars()
+    builder = EPSFBuilder(oversampling=2, maxiters=1, progress_bar=False,
+                          constrain_stars=('Flux', 'Position'))
+    builder._apply_linked_star_constraints(stars)
+    assert stars.calls == ['Position', 'Flux']
 
 
 @pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib is required')
