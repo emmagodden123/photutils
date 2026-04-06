@@ -785,7 +785,7 @@ class GriddedEPSFBuilder:
                     oversampling=self.oversampling,
                     fitter=self.fitter,
                     maxiters=self.maxiters,
-                    progress_bar=True,  # We'll manage progress globally
+                    progress_bar=False,  # Managed by GriddedEPSFBuilder
                     plot_diagnostics=False,  # We'll manage diagnostics globally
                     **self.epsf_builder_kwargs)
                 row.append(builder)
@@ -857,6 +857,11 @@ class GriddedEPSFBuilder:
         """
         n_grid = len(self.grid_xypos)
 
+        try:
+            from tqdm import tqdm
+        except ImportError:
+            tqdm = None
+
         if self.plot_diagnostics:
             initial_samples = self._collect_sample_arrays(stars)
             self._plot_star_distribution_diagnostics(initial_samples,
@@ -896,14 +901,23 @@ class GriddedEPSFBuilder:
 
             # Build initial ePSF for each grid cell
             grid_epsfs = []
-            for i, row in enumerate(grid_stars):
-                for j, cell_stars in enumerate(row):
-                    if cell_stars is None:
-                        grid_epsfs.append(None)
-                    else:
-                        builder = self.grid_builders[i][j]
-                        epsf, _ = builder.build_epsf(cell_stars)
-                        grid_epsfs.append(epsf)
+            initial_indices = range(n_grid)
+            if self.progress_bar and tqdm is not None:
+                initial_indices = tqdm(
+                    initial_indices,
+                    desc='GriddedEPSFBuilder initial grid build',
+                    total=n_grid)
+
+            for idx in initial_indices:
+                i, j = divmod(idx, len(self.x_grid))
+                cell_stars = grid_stars[i][j]
+
+                if cell_stars is None:
+                    grid_epsfs.append(None)
+                else:
+                    builder = self.grid_builders[i][j]
+                    epsf, _ = builder.build_epsf(cell_stars)
+                    grid_epsfs.append(epsf)
 
             # Create initial GriddedPSFModel
             gridded_model = self._make_gridded_psf_model(grid_epsfs)
@@ -912,11 +926,6 @@ class GriddedEPSFBuilder:
             self._plot_grid_epsf_models(grid_epsfs, 'initial grid ePSF models')
 
         # Iteratively improve the gridded ePSF
-        pbar = None
-        if self.progress_bar:
-            pbar = add_progress_bar(total=self.maxiters,
-                                   desc='GriddedEPSFBuilder')
-
         for iteration in range(self.maxiters):
             # Fit gridded model to all stars
             fitted_stars = self.gridded_fitter(gridded_model, stars)
@@ -928,26 +937,34 @@ class GriddedEPSFBuilder:
 
             # Compute residuals and update each grid cell
             grid_stars = self._partition_stars_by_gridcell(fitted_stars)
-            new_grid_epsfs = []
+            new_grid_epsfs = [None] * n_grid
+            cell_indices = range(n_grid)
+            if self.progress_bar and tqdm is not None:
+                cell_indices = tqdm(
+                    cell_indices,
+                    desc=(f'GriddedEPSFBuilder iteration '
+                          f'{iteration + 1}/{self.maxiters}'),
+                    total=n_grid)
 
-            for i, row in enumerate(grid_stars):
-                for j, cell_stars in enumerate(row):
-                    if cell_stars is None:
-                        # Use previous ePSF if not enough stars
-                        new_grid_epsfs.append(grid_epsfs[i * len(self.x_grid) + j])
-                    else:
-                        builder = self.grid_builders[i][j]
-                        init_epsf = grid_epsfs[i * len(self.x_grid) + j]
-                        try:
-                            epsf, _ = builder.build_epsf(
-                                cell_stars, init_model=init_epsf)
-                            new_grid_epsfs.append(epsf)
-                        except Exception as e:
-                            warnings.warn(
-                                f'Failed to update ePSF at grid cell ({i}, {j}): {e}',
-                                AstropyUserWarning)
-                            new_grid_epsfs.append(
-                                grid_epsfs[i * len(self.x_grid) + j])
+            for idx in cell_indices:
+                i, j = divmod(idx, len(self.x_grid))
+                cell_stars = grid_stars[i][j]
+
+                if cell_stars is None:
+                    # Use previous ePSF if not enough stars
+                    new_grid_epsfs[idx] = grid_epsfs[idx]
+                else:
+                    builder = self.grid_builders[i][j]
+                    init_epsf = grid_epsfs[idx]
+                    try:
+                        epsf, _ = builder.build_epsf(
+                            cell_stars, init_model=init_epsf)
+                        new_grid_epsfs[idx] = epsf
+                    except Exception as e:
+                        warnings.warn(
+                            f'Failed to update ePSF at grid cell ({i}, {j}): {e}',
+                            AstropyUserWarning)
+                        new_grid_epsfs[idx] = grid_epsfs[idx]
 
             grid_epsfs = new_grid_epsfs
             gridded_model = self._make_gridded_psf_model(grid_epsfs)
@@ -955,12 +972,6 @@ class GriddedEPSFBuilder:
             if self.plot_diagnostics:
                 self._plot_grid_epsf_models(
                     grid_epsfs, f'iteration {iteration + 1}')
-
-            if pbar is not None:
-                pbar.update(1)
-
-        if pbar is not None:
-            pbar.close()
 
         # Final fit to get improved star parameters
         fitted_stars = self.gridded_fitter(gridded_model, stars)
