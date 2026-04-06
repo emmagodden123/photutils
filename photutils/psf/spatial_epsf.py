@@ -1393,7 +1393,11 @@ class SpatialEPSFBuilder:
         y, x = np.indices(image_psf.data.shape, dtype=float)
         x /= image_psf.oversampling[1]
         y /= image_psf.oversampling[0]
-        return image_psf.evaluate(x=x, y=y, flux=1.0, x_0=-dx, y_0=-dy)
+        # Evaluate on the native oversampled grid; this must be identity
+        # when dx=dy=0, so include the origin baseline in x_0/y_0.
+        x0 = image_psf.origin[0] / image_psf.oversampling[1] - dx
+        y0 = image_psf.origin[1] / image_psf.oversampling[0] - dy
+        return image_psf.evaluate(x=x, y=y, flux=1.0, x_0=x0, y_0=y0)
 
     def _measure_recentering_shift(self, coeff_data, sample_positions):
         """
@@ -1455,8 +1459,10 @@ class SpatialEPSFBuilder:
 
             dx_total += dx
             dy_total += dy
+            new_x_0 = (xcenter / self.oversampling[1]) - dx_total
+            new_y_0 = (ycenter / self.oversampling[0]) - dy_total
             epsf_data = local_epsf.evaluate(x=x, y=y, flux=1.0,
-                                            x_0=-dx_total, y_0=-dy_total)
+                                            x_0=new_x_0, y_0=new_y_0)
 
         return dx_total, dy_total
 
@@ -2534,9 +2540,8 @@ class SpatialEPSFBuilder:
             stars = fitted_stars
 
         self._log('SpatialEPSFBuilder: finished')
-        if self.final_ppe_model is None:
-            self.final_ppe_model = self._make_empty_ppe_model()
-        return spatial_model, stars, self.final_ppe_model
+
+        return spatial_model, stars
 
 
 class PPEMap:
