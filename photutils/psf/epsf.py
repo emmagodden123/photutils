@@ -867,7 +867,12 @@ class EPSFBuilder:
 
         rms_values = []
         for star in good_stars:
-            residual = star.compute_residual_image(epsf) / star.flux
+            flux = float(np.asanyarray(star.flux, dtype=float))
+            if not np.isfinite(flux) or flux == 0.0:
+                rms_values.append(np.nan)
+                continue
+
+            residual = star.compute_residual_image(epsf) / flux
             residual = residual[~star.mask]
             residual = residual[np.isfinite(residual)]
             if residual.size == 0:

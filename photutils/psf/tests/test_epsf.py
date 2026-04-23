@@ -4,6 +4,7 @@ Tests for the epsf module.
 """
 
 import itertools
+import warnings
 
 import numpy as np
 import pytest
@@ -190,6 +191,24 @@ class TestEPSFBuild:
 
         with pytest.raises(TypeError, match=match):
             EPSFBuilder(fitter=TRFLSQFitter, maxiters=3)
+
+
+def test_select_residual_stars_zero_flux_no_runtime_warning():
+    builder = EPSFBuilder(maxiters=1, progress_bar=False)
+
+    data = np.zeros((7, 7), dtype=float)
+    weights = np.ones_like(data)
+    star = EPSFStar(data, weights=weights, cutout_center=(3.0, 3.0))
+    stars = EPSFStars([star])
+    epsf = ImagePSF(data=np.ones((7, 7), dtype=float), oversampling=1)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        selected = builder._select_residual_stars(stars, epsf)
+
+    assert len(selected) == 1
+    assert selected[0] is star
+    assert not any(issubclass(w.category, RuntimeWarning) for w in caught)
 
 
 def test_epsfbuilder_inputs():
