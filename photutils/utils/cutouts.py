@@ -14,6 +14,11 @@ __all__ = ['CutoutImage']
 
 def _overlap_slices(large_array_shape, small_array_shape, position,
                     mode='partial'):
+    # Normalize shape inputs to tuples so Astropy receives immutable
+    # sequences and avoids ndarray comparison ambiguities.
+    large_array_shape = tuple(np.atleast_1d(large_array_shape))
+    small_array_shape = tuple(np.atleast_1d(small_array_shape))
+
     slc_lg, slc_sm = overlap_slices(large_array_shape, small_array_shape,
                                     position, mode=mode)
 

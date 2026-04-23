@@ -10,7 +10,7 @@ from numpy.testing import assert_equal
 
 from photutils.aperture import BoundingBox
 from photutils.datasets import make_100gaussians_image
-from photutils.utils.cutouts import CutoutImage
+from photutils.utils.cutouts import CutoutImage, _overlap_slices
 
 
 def test_cutout():
@@ -97,3 +97,26 @@ def test_cutout_copy():
     cutout2 = CutoutImage(data, (1, 1), (3, 3), copy=False)
     cutout2.data[0, 0] = np.nan
     assert np.isnan(data[0, 0])
+
+
+def test_overlap_slices_accepts_ndarray_shapes(monkeypatch):
+        received = {}
+
+        def mock_overlap_slices(large_array_shape, small_array_shape, position,
+                                                        mode='partial'):
+                received['large_array_shape'] = large_array_shape
+                received['small_array_shape'] = small_array_shape
+                received['position'] = position
+                received['mode'] = mode
+                return ((slice(0, 1), slice(0, 1)), (slice(0, 1), slice(0, 1)))
+
+        monkeypatch.setattr('photutils.utils.cutouts.overlap_slices',
+                                                mock_overlap_slices)
+
+        _overlap_slices(np.array([9, 9]), np.array([5, 5]), (4.0, 4.0),
+                                        mode='strict')
+
+        assert received['large_array_shape'] == (9, 9)
+        assert received['small_array_shape'] == (5, 5)
+        assert received['position'] == (4.0, 4.0)
+        assert received['mode'] == 'strict'
