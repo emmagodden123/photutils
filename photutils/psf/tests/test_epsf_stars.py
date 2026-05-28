@@ -176,6 +176,15 @@ def test_epsf_star_residual_image():
     assert_allclose(np.sum(residual), 0.0, atol=1.0e-3, rtol=1e-3)
 
 
+def test_epsf_star_fwhm_metadata():
+    star = EPSFStar(np.ones((5, 5), dtype=float), fwhm=2.5)
+
+    assert star.fwhm == 2.5
+
+    with pytest.raises(ValueError, match='fwhm must be'):
+        EPSFStar(np.ones((5, 5), dtype=float), fwhm=0.0)
+
+
 def test_stars_pickleable():
     """
     Verify that EPSFStars can be successfully pickled/unpickled for use

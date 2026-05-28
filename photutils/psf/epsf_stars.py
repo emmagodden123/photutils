@@ -71,11 +71,16 @@ class EPSFStar:
         intended for workflows where cutout data are exposure-time
         normalized, but flux-dependent PSF systematics should use
         time-integrated flux.
+
+    fwhm : float or `None`, optional
+        The image FWHM associated with the star cutout. This is a
+        placeholder metadata value for workflows where the ePSF model
+        depends on image FWHM.
     """
 
     def __init__(self, data, *, weights=None, cutout_center=None,
                  origin=(0, 0), wcs_large=None, id_label=None,
-                 frame_id=None, exposure_time=None):
+                 frame_id=None, exposure_time=None, fwhm=None):
 
         self._data = np.asanyarray(data)
         self.shape = self._data.shape
@@ -111,6 +116,15 @@ class EPSFStar:
                 raise ValueError('exposure_time must be a finite positive '
                                  'number or None')
             self.exposure_time = exposure_time
+
+        if fwhm is None:
+            self.fwhm = None
+        else:
+            fwhm = float(fwhm)
+            if not np.isfinite(fwhm) or fwhm <= 0.0:
+                raise ValueError('fwhm must be a finite positive number '
+                                 'or None')
+            self.fwhm = fwhm
 
         self.flux = self.estimate_flux()
 
@@ -368,7 +382,7 @@ class EPSFStars:
 
     def __getattr__(self, attr):
         if attr in ['cutout_center', 'center', 'flux',
-                    'exposure_time', '_excluded_from_fit']:
+                    'exposure_time', 'fwhm', '_excluded_from_fit']:
             result = np.array([getattr(star, attr) for star in self._data])
         else:
             result = [getattr(star, attr) for star in self._data]
