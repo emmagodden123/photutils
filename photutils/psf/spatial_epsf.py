@@ -490,7 +490,31 @@ class SpatialEPSFFitter:
                                         lower_bound=(3, 0), check_odd=True))
         self.progress_bar = bool(progress_bar)
         self.plot_fit_checks = bool(plot_fit_checks)
-        self.model_weight_map = model_weight_map
+
+        # Temporary test of the effect of model_weight_map:
+        if model_weight_map is None:
+            alpha = 0.0
+
+            def _default_model_weight_map(local_epsf, star):
+                trust_map = getattr(local_epsf, 'trust_map', None)
+                if trust_map is None:
+                    return np.ones_like(local_epsf.data, dtype=float)
+
+                trust_map = np.asanyarray(trust_map, dtype=float)
+                valid = np.isfinite(trust_map) & (trust_map > 0.0)
+
+                weight_map = np.ones_like(trust_map, dtype=float)
+                weight_map[valid] = 1.0 / np.power(trust_map[valid], alpha)
+
+                median_weight = np.nanmedian(weight_map[valid])
+                if np.isfinite(median_weight) and median_weight > 0.0:
+                    weight_map[valid] /= median_weight
+
+                return weight_map
+
+            self.model_weight_map = _default_model_weight_map
+        else:
+            self.model_weight_map = model_weight_map
 
         self.model_weight_maxiters = int(model_weight_maxiters)
         if self.model_weight_maxiters <= 0:

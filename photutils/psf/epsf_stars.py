@@ -65,11 +65,17 @@ class EPSFStar:
     frame_id : int, str, or `None`, optional
         An optional identifier for the image/exposure/frame from which
         the star cutout was extracted.
+
+    exposure_time : float or `None`, optional
+        The exposure time associated with the star cutout. This is
+        intended for workflows where cutout data are exposure-time
+        normalized, but flux-dependent PSF systematics should use
+        time-integrated flux.
     """
 
     def __init__(self, data, *, weights=None, cutout_center=None,
                  origin=(0, 0), wcs_large=None, id_label=None,
-                 frame_id=None):
+                 frame_id=None, exposure_time=None):
 
         self._data = np.asanyarray(data)
         self.shape = self._data.shape
@@ -96,6 +102,15 @@ class EPSFStar:
         self.wcs_large = wcs_large
         self.id_label = id_label
         self.frame_id = frame_id
+
+        if exposure_time is None:
+            self.exposure_time = None
+        else:
+            exposure_time = float(exposure_time)
+            if not np.isfinite(exposure_time) or exposure_time <= 0.0:
+                raise ValueError('exposure_time must be a finite positive '
+                                 'number or None')
+            self.exposure_time = exposure_time
 
         self.flux = self.estimate_flux()
 
@@ -353,7 +368,7 @@ class EPSFStars:
 
     def __getattr__(self, attr):
         if attr in ['cutout_center', 'center', 'flux',
-                    '_excluded_from_fit']:
+                    'exposure_time', '_excluded_from_fit']:
             result = np.array([getattr(star, attr) for star in self._data])
         else:
             result = [getattr(star, attr) for star in self._data]

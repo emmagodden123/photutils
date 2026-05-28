@@ -1268,6 +1268,9 @@ class EPSFBuilder:
         for linked_star in stars._data:
             if not isinstance(linked_star, LinkedEPSFStar):
                 continue
+            # Check that linked star has at least 3 good stars to ensure a reliable mean position and flux.
+            if len(linked_star.all_good_stars) < 3:
+                continue
             mean_flux = linked_star.get_mean_flux()
             mean_ra, mean_dec = linked_star.get_mean_radec()
             if mean_flux is None or not np.isfinite(mean_flux):

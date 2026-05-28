@@ -791,6 +791,22 @@ class GriddedEPSFBuilder:
                 row.append(builder)
             self.grid_builders.append(row)
 
+    @staticmethod
+    def _build_grid_cell_epsf(builder, stars, *, init_model=None,
+                              maxiters=None):
+        """
+        Build or update one grid-cell ePSF.
+        """
+        if maxiters is None:
+            return builder.build_epsf(stars, init_model=init_model)
+
+        builder_maxiters = builder.maxiters
+        builder.maxiters = maxiters
+        try:
+            return builder.build_epsf(stars, init_model=init_model)
+        finally:
+            builder.maxiters = builder_maxiters
+
     def _partition_stars_by_gridcell(self, stars):
         """
         Partition stars into grid cells based on their positions.
@@ -812,19 +828,30 @@ class GriddedEPSFBuilder:
                 cell_stars = []
                 for star_group in stars:
                     if isinstance(star_group, LinkedEPSFStar):
-                        # Handle LinkedEPSFStar by checking each component star
+                        # Preserve linked-star groupings within each cell so
+                        # the per-cell EPSFBuilder can still apply its linked
+                        # flux/position constraints and PPE calibration.
+                        linked_cell_stars = []
                         for star in star_group:
                             star_x, star_y = star.center
-                            if (x_min <= star_x < x_max and y_min <= star_y < y_max):
-                                cell_stars.append(star)
+                            if (x_min <= star_x < x_max
+                                    and y_min <= star_y < y_max):
+                                linked_cell_stars.append(star)
+
+                        if len(linked_cell_stars) > 1:
+                            cell_stars.append(
+                                LinkedEPSFStar(linked_cell_stars))
+                        elif len(linked_cell_stars) == 1:
+                            cell_stars.append(linked_cell_stars[0])
                     elif isinstance(star_group, EPSFStar):
                         # Handle regular EPSFStar
                         star_x, star_y = star_group.center
                         if (x_min <= star_x < x_max and y_min <= star_y < y_max):
                             cell_stars.append(star_group)
 
-                if len(cell_stars) >= self.min_stars_per_gridcell:
-                    row.append(EPSFStars(cell_stars))
+                epsf_stars = EPSFStars(cell_stars)
+                if epsf_stars.n_all_stars >= self.min_stars_per_gridcell:
+                    row.append(epsf_stars)
                 else:
                     row.append(None)  # Not enough stars for this cell
 
@@ -916,7 +943,8 @@ class GriddedEPSFBuilder:
                     grid_epsfs.append(None)
                 else:
                     builder = self.grid_builders[i][j]
-                    epsf, _ = builder.build_epsf(cell_stars)
+                    epsf, _ = self._build_grid_cell_epsf(
+                        builder, cell_stars)
                     grid_epsfs.append(epsf)
 
             # Create initial GriddedPSFModel
@@ -957,8 +985,9 @@ class GriddedEPSFBuilder:
                     builder = self.grid_builders[i][j]
                     init_epsf = grid_epsfs[idx]
                     try:
-                        epsf, _ = builder.build_epsf(
-                            cell_stars, init_model=init_epsf)
+                        epsf, _ = self._build_grid_cell_epsf(
+                            builder, cell_stars, init_model=init_epsf,
+                            maxiters=1)
                         new_grid_epsfs[idx] = epsf
                     except Exception as e:
                         warnings.warn(
@@ -1001,12 +1030,24 @@ class GriddedEPSFBuilder:
                    'min_stars_per_gridcell.')
             raise ValueError(msg)
 
+        valid_indices = [idx for idx, epsf in enumerate(grid_epsfs)
+                         if epsf is not None]
+        valid_xypos = self.grid_xypos[valid_indices]
+
         valid_epsfs = []
+        missing_indices = []
         for epsf in grid_epsfs:
             if epsf is None:
-                valid_epsfs.append(np.zeros_like(template_epsf.data))
+                missing_indices.append(len(valid_epsfs))
+                valid_epsfs.append(None)
             else:
                 valid_epsfs.append(epsf.data)
+
+        for idx in missing_indices:
+            distance_sq = np.sum((valid_xypos - self.grid_xypos[idx])**2,
+                                 axis=1)
+            nearest_idx = valid_indices[np.argmin(distance_sq)]
+            valid_epsfs[idx] = grid_epsfs[nearest_idx].data
 
         # Reshape to match grid layout, then flatten
         grid_data = np.array(valid_epsfs)
