@@ -46,6 +46,15 @@ def _parse_dependencies(dependencies):
     return tuple(dict.fromkeys(dependencies))
 
 
+def _parse_correction_mode(mode, name):
+    """
+    Parse a variable-correction mode label.
+    """
+    if mode not in ('multiplicative', 'additive'):
+        raise ValueError(f"{name} must be 'multiplicative' or 'additive'")
+    return mode
+
+
 class VariableEPSFModel(SpatialEPSFModel):
     """
     A configurable dependency ePSF model.
@@ -64,6 +73,15 @@ class VariableEPSFModel(SpatialEPSFModel):
         ``'FWHM'`` is present, a multiplicative polynomial-in-FWHM
         correction image is applied.
 
+    clip_negative : bool, optional
+        Whether to clip negative local ePSF values to zero after applying
+        all enabled dependency terms.
+
+    flux_correction_mode : {'multiplicative', 'additive'}, optional
+        How to apply the flux-dependent correction image. The
+        ``'multiplicative'`` mode applies ``data * (1 + correction)``.
+        The ``'additive'`` mode applies ``data + correction``.
+
     flux_coeff_data : 3D `~numpy.ndarray`, optional
         Flux coefficient array with shape ``(flux_degree, ny, nx)``.
 
@@ -78,6 +96,9 @@ class VariableEPSFModel(SpatialEPSFModel):
 
     fwhm_coeff_data : 3D `~numpy.ndarray`, optional
         FWHM coefficient array with shape ``(fwhm_degree, ny, nx)``.
+
+    fwhm_correction_mode : {'multiplicative', 'additive'}, optional
+        How to apply the FWHM-dependent correction image.
 
     fwhm_degree : int, optional
         Polynomial degree used for the FWHM basis. Supported values are 1
@@ -95,8 +116,11 @@ class VariableEPSFModel(SpatialEPSFModel):
                  detector_origin=None, detector_span=None,
                  normalize_local_epsf=True, trust_map=None,
                  epsf_class=ImagePSF, dependencies=('Position',),
+                 clip_negative=False,
+                 flux_correction_mode='multiplicative',
                  flux_coeff_data=None, flux_degree=1,
                  flux_reference=1.0, flux_scale=1.0,
+                 fwhm_correction_mode='multiplicative',
                  fwhm_coeff_data=None, fwhm_degree=1,
                  fwhm_reference=1.0, fwhm_scale=1.0,
                  coeff_data=None):
@@ -124,6 +148,11 @@ class VariableEPSFModel(SpatialEPSFModel):
             epsf_class=epsf_class)
 
         self.dependencies = dependencies
+        self.clip_negative = bool(clip_negative)
+        self.flux_correction_mode = _parse_correction_mode(
+            flux_correction_mode, 'flux_correction_mode')
+        self.fwhm_correction_mode = _parse_correction_mode(
+            fwhm_correction_mode, 'fwhm_correction_mode')
         self.flux_degree = int(flux_degree)
         if self.flux_degree not in (1, 2):
             raise ValueError('flux_degree must be 1 or 2')
@@ -234,7 +263,10 @@ class VariableEPSFModel(SpatialEPSFModel):
             flux_basis = self.flux_basis_vector(flux)
             flux_correction = np.tensordot(
                 flux_basis, self.flux_coeff_data, axes=(0, 0))
-            data = data * (1.0 + flux_correction)
+            if self.flux_correction_mode == 'multiplicative':
+                data = data * (1.0 + flux_correction)
+            else:
+                data = data + flux_correction
 
         if self.has_fwhm_dependency:
             if fwhm is None:
@@ -244,7 +276,13 @@ class VariableEPSFModel(SpatialEPSFModel):
             fwhm_basis = self.fwhm_basis_vector(fwhm)
             fwhm_correction = np.tensordot(
                 fwhm_basis, self.fwhm_coeff_data, axes=(0, 0))
-            data = data * (1.0 + fwhm_correction)
+            if self.fwhm_correction_mode == 'multiplicative':
+                data = data * (1.0 + fwhm_correction)
+            else:
+                data = data + fwhm_correction
+
+        if self.clip_negative:
+            data = np.clip(data, 0.0, None)
 
         return data
 
@@ -486,15 +524,23 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
 
     Notes
     -----
-    This is an experimental prototype that layers flux- and
-    FWHM-dependent multiplicative corrections onto the spatial model.
+    This is an experimental prototype that layers configurable flux- and
+    FWHM-dependent corrections onto the spatial model.
     """
 
     def __init__(self, *, dependencies=('Position',), flux_degree=1,
                  flux_min_valid_samples=25,
                  fwhm_degree=1, fwhm_min_valid_samples=25,
-                 use_time_integrated_flux=True, fitter=None, **kwargs):
+                 flux_correction_mode='multiplicative',
+                 fwhm_correction_mode='multiplicative',
+                 use_time_integrated_flux=True, clip_negative=True,
+                 fitter=None, **kwargs):
         self.dependencies = _parse_dependencies(dependencies)
+        self.clip_negative = bool(clip_negative)
+        self.flux_correction_mode = _parse_correction_mode(
+            flux_correction_mode, 'flux_correction_mode')
+        self.fwhm_correction_mode = _parse_correction_mode(
+            fwhm_correction_mode, 'fwhm_correction_mode')
         self.flux_degree = int(flux_degree)
         if self.flux_degree not in (1, 2):
             raise ValueError('flux_degree must be 1 or 2')
@@ -664,19 +710,46 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
     @staticmethod
     def _fractional_residuals(residuals, model_data):
         model_data = np.asanyarray(model_data, dtype=float)
-        floor = np.nanpercentile(np.abs(model_data[np.isfinite(model_data)]),
-                                 10.0)
-        if not np.isfinite(floor) or floor <= 0.0:
+        finite = np.isfinite(model_data)
+        if not np.any(finite):
+            return np.full_like(residuals, np.nan, dtype=float)
+
+        abs_model = np.abs(model_data)
+        floor = np.nanpercentile(abs_model[finite], 10.0)
+        if not np.isfinite(floor) or floor < 0.0:
             floor = 1.0e-12
-        valid = np.isfinite(model_data) & (np.abs(model_data) > floor)
+
+        peak = np.max(np.where(finite, abs_model, 0.0), axis=(1, 2),
+                      keepdims=True)
+        # Multiplicative corrections are poorly constrained in the far
+        # wings where the current ePSF is nearly zero.
+        floor = np.maximum(floor, 1.0e-3 * peak)
+        valid = finite & (abs_model > floor)
         frac = np.full_like(residuals, np.nan, dtype=float)
         np.divide(residuals, model_data, out=frac, where=valid)
         return frac
 
+    @staticmethod
+    def _correction_residuals(residuals, model_data, correction_mode):
+        if correction_mode == 'multiplicative':
+            return VariableEPSFBuilder._fractional_residuals(residuals,
+                                                            model_data)
+        return np.array(residuals, copy=True, dtype=float)
+
+    def _shift_coefficient_stack(self, coeff_data, dx, dy):
+        if coeff_data is None:
+            return None
+
+        result = np.empty_like(coeff_data)
+        for idx in range(coeff_data.shape[0]):
+            result[idx] = self._shift_oversampled_image(coeff_data[idx],
+                                                        dx=dx, dy=dy)
+        return result
+
     def _fit_flux_coefficients(self, residuals, weights, effective_flux):
         _, ny, nx = residuals.shape
         n_basis = self.flux_degree
-        coeff = np.zeros((n_basis, ny, nx), dtype=float)
+        coeff = np.full((n_basis, ny, nx), np.nan, dtype=float)
 
         flux_norm, reference, scale = self._normalize_flux_samples(
             effective_flux)
@@ -714,6 +787,7 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 coeffs, _, _, _ = np.linalg.lstsq(design_w, z_w, rcond=None)
                 coeff[:, iy, ix] = coeffs
 
+        coeff = self._interpolate_missing_coefficient_images(coeff)
         return coeff, reference, scale
 
     @staticmethod
@@ -723,7 +797,7 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
     def _fit_fwhm_coefficients(self, residuals, weights, effective_fwhm):
         _, ny, nx = residuals.shape
         n_basis = self.fwhm_degree
-        coeff = np.zeros((n_basis, ny, nx), dtype=float)
+        coeff = np.full((n_basis, ny, nx), np.nan, dtype=float)
 
         fwhm_norm, reference, scale = self._normalize_fwhm_samples(
             effective_fwhm)
@@ -761,6 +835,7 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 coeffs, _, _, _ = np.linalg.lstsq(design_w, z_w, rcond=None)
                 coeff[:, iy, ix] = coeffs
 
+        coeff = self._interpolate_missing_coefficient_images(coeff)
         return coeff, reference, scale
 
     def _resample_residual(self, star, spatial_model):
@@ -870,9 +945,12 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                     trust_map=getattr(init_model, 'trust_map', None),
                     epsf_class=init_model.epsf_class,
                     dependencies=self.dependencies,
+                    clip_negative=self.clip_negative,
+                    flux_correction_mode=self.flux_correction_mode,
                     flux_degree=self.flux_degree,
                     flux_reference=self._flux_reference,
                     flux_scale=self._flux_scale,
+                    fwhm_correction_mode=self.fwhm_correction_mode,
                     fwhm_degree=self.fwhm_degree,
                     fwhm_reference=self._fwhm_reference,
                     fwhm_scale=self._fwhm_scale)
@@ -892,9 +970,12 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
             trust_map=getattr(base_model, 'trust_map', None),
             epsf_class=self.epsf_class,
             dependencies=self.dependencies,
+            clip_negative=self.clip_negative,
+            flux_correction_mode=self.flux_correction_mode,
             flux_degree=self.flux_degree,
             flux_reference=self._flux_reference,
             flux_scale=self._flux_scale,
+            fwhm_correction_mode=self.fwhm_correction_mode,
             fwhm_degree=self.fwhm_degree,
             fwhm_reference=self._fwhm_reference,
             fwhm_scale=self._fwhm_scale)
@@ -993,7 +1074,8 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
             flux_coeff_update = None
             effective_flux = None
             effective_fwhm = None
-            fractional_residuals = None
+            flux_residuals = None
+            fwhm_residuals = None
             if ('Flux' in self.dependencies or 'FWHM' in self.dependencies):
                 if 'Flux' in self.dependencies:
                     effective_flux = self._collect_effective_flux_samples(
@@ -1008,14 +1090,19 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 model_data = self._sample_model_data(
                     variable_model, det_x, det_y, effective_flux,
                     effective_fwhm)
-                fractional_residuals = self._fractional_residuals(
-                    residuals, model_data)
+                if 'Flux' in self.dependencies:
+                    flux_residuals = self._correction_residuals(
+                        residuals, model_data, self.flux_correction_mode)
+                if 'FWHM' in self.dependencies:
+                    fwhm_residuals = self._correction_residuals(
+                        residuals, model_data, self.fwhm_correction_mode)
 
             if 'Flux' in self.dependencies:
                 self._log(f'VariableEPSFBuilder: iteration {iter_num} '
-                          'fitting flux multiplier coefficient surfaces')
+                          f'fitting {self.flux_correction_mode} flux '
+                          'coefficient surfaces')
                 flux_coeff_update, flux_reference, flux_scale = (
-                    self._fit_flux_coefficients(fractional_residuals, weights,
+                    self._fit_flux_coefficients(flux_residuals, weights,
                                                 effective_flux))
 
             fwhm_reference = variable_model.fwhm_reference
@@ -1023,9 +1110,10 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
             fwhm_coeff_update = None
             if 'FWHM' in self.dependencies:
                 self._log(f'VariableEPSFBuilder: iteration {iter_num} '
-                          'fitting FWHM multiplier coefficient surfaces')
+                          f'fitting {self.fwhm_correction_mode} FWHM '
+                          'coefficient surfaces')
                 fwhm_coeff_update, fwhm_reference, fwhm_scale = (
-                    self._fit_fwhm_coefficients(fractional_residuals, weights,
+                    self._fit_fwhm_coefficients(fwhm_residuals, weights,
                                                 effective_fwhm))
 
             self._log(f'VariableEPSFBuilder: iteration {iter_num} updating '
@@ -1054,14 +1142,25 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
             self._log(f'VariableEPSFBuilder: iteration {iter_num} smoothing '
                       'coefficient images')
             spatial_coeff_data = self._smooth_coefficients(spatial_coeff_data)
+            if flux_coeff_data is not None:
+                flux_coeff_data = self._smooth_coefficients(flux_coeff_data)
+            if fwhm_coeff_data is not None:
+                fwhm_coeff_data = self._smooth_coefficients(fwhm_coeff_data)
 
             sample_positions = list(zip(det_x, det_y, strict=True))
 
             if self.recenter_epsf:
                 self._log(f'VariableEPSFBuilder: iteration {iter_num} '
                           'recentering variable ePSF')
-                spatial_coeff_data = self._recenter_coefficients(
-                    spatial_coeff_data, sample_positions)
+                dx, dy = self._measure_recentering_shift(spatial_coeff_data,
+                                                         sample_positions)
+                if dx != 0.0 or dy != 0.0:
+                    spatial_coeff_data = self._shift_coefficient_stack(
+                        spatial_coeff_data, dx, dy)
+                    flux_coeff_data = self._shift_coefficient_stack(
+                        flux_coeff_data, dx, dy)
+                    fwhm_coeff_data = self._shift_coefficient_stack(
+                        fwhm_coeff_data, dx, dy)
 
             self._log(f'VariableEPSFBuilder: iteration {iter_num} '
                       'normalizing variable ePSF')
@@ -1083,10 +1182,13 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 trust_map=trust_map,
                 epsf_class=self.epsf_class,
                 dependencies=self.dependencies,
+                clip_negative=self.clip_negative,
+                flux_correction_mode=self.flux_correction_mode,
                 flux_coeff_data=flux_coeff_data,
                 flux_degree=self.flux_degree,
                 flux_reference=flux_reference,
                 flux_scale=flux_scale,
+                fwhm_correction_mode=self.fwhm_correction_mode,
                 fwhm_coeff_data=fwhm_coeff_data,
                 fwhm_degree=self.fwhm_degree,
                 fwhm_reference=fwhm_reference,

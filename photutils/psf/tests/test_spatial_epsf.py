@@ -175,8 +175,10 @@ def test_spatial_epsf_builder_trust_map_rms_from_residuals():
 
 def test_spatial_epsf_builder_infers_detector_geometry_from_samples():
     stars = EPSFStars([
-        EPSFStar(np.ones((5, 5), dtype=float), origin=(50, 100)),
-        EPSFStar(np.ones((5, 5), dtype=float), origin=(90, 140)),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 origin=(50, 100)),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 origin=(90, 140)),
     ])
 
     builder = SpatialEPSFBuilder(oversampling=1, degree=1, maxiters=1,
@@ -272,6 +274,17 @@ def test_spatial_epsf_builder_auto_quadratic_offset_core_size():
     assert_allclose(builder._auto_quadratic_offset_core_size((5, 7)), (3, 3))
 
 
+def test_spatial_epsf_builder_interpolates_missing_coefficients():
+    builder = SpatialEPSFBuilder(detector_shape=(10, 10),
+                                 coefficient_interpolation_method='nearest')
+    coeff = np.array([[[1.0, np.nan], [3.0, 4.0]]])
+
+    result = builder._interpolate_missing_coefficient_images(coeff)
+
+    assert np.all(np.isfinite(result))
+    assert result[0, 0, 1] in (1.0, 3.0, 4.0)
+
+
 def test_spatial_epsf_builder_residual_outlier_clip_validation():
     with pytest.raises(ValueError,
                        match='residual_outlier_clip must be positive or None'):
@@ -313,10 +326,14 @@ def test_spatial_epsf_builder_residual_star_rms_clip_validation():
 
 def test_spatial_epsf_builder_select_residual_stars_rms_clip(monkeypatch):
     stars = EPSFStars([
-        EPSFStar(np.ones((5, 5), dtype=float), id_label='good0'),
-        EPSFStar(np.ones((5, 5), dtype=float), id_label='good1'),
-        EPSFStar(np.ones((5, 5), dtype=float), id_label='good2'),
-        EPSFStar(np.ones((5, 5), dtype=float), id_label='bad'),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='good0'),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='good1'),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='good2'),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='bad'),
     ])
     rms_by_id = {'good0': 0.00, 'good1': 0.05, 'good2': 0.08, 'bad': 0.50}
 

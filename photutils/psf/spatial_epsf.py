@@ -20,6 +20,7 @@ from astropy.nddata.utils import NoOverlapError, PartialOverlapError
 from astropy.stats import SigmaClip
 from astropy.utils.exceptions import AstropyUserWarning
 from scipy.ndimage import convolve, map_coordinates
+from scipy.spatial import QhullError
 
 from photutils.centroids import centroid_com
 from photutils.psf.epsf_stars import EPSFStar, EPSFStars, LinkedEPSFStar
@@ -789,6 +790,8 @@ class SpatialEPSFBuilder:
                  residual_star_rms_clip=None,
                  residual_outlier_clip=3.0,
                  residual_min_valid_samples=10,
+                 interpolate_missing_coefficients=True,
+                 coefficient_interpolation_method='cubic',
                  plot_diagnostics=False,
                  ):
         self._detector_shape_explicit = detector_shape is not None
@@ -830,6 +833,13 @@ class SpatialEPSFBuilder:
         self.residual_min_valid_samples = int(residual_min_valid_samples)
         if self.residual_min_valid_samples <= 0:
             raise ValueError('residual_min_valid_samples must be positive')
+
+        self.interpolate_missing_coefficients = bool(
+            interpolate_missing_coefficients)
+        self.coefficient_interpolation_method = coefficient_interpolation_method
+        if self.coefficient_interpolation_method not in ('cubic', 'nearest'):
+            raise ValueError("coefficient_interpolation_method must be "
+                             "'cubic' or 'nearest'")
 
         if isinstance(calibrate_ppe, str):
             calibrate_ppe = (calibrate_ppe,)
@@ -1259,6 +1269,58 @@ class SpatialEPSFBuilder:
         max_core = np.maximum(max_core, 3)
         return np.minimum(core, max_core)
 
+    def _interpolate_missing_coefficient_images(self, coeff_data):
+        if not self.interpolate_missing_coefficients:
+            coeff_data = np.array(coeff_data, copy=True, dtype=float)
+            coeff_data[~np.isfinite(coeff_data)] = 0.0
+            return coeff_data
+
+        coeff_data = np.array(coeff_data, copy=True, dtype=float)
+        for idx in range(coeff_data.shape[0]):
+            image = coeff_data[idx]
+            mask = ~np.isfinite(image)
+            if not np.any(mask):
+                continue
+
+            if np.all(mask):
+                image[:] = 0.0
+                continue
+
+            method = self.coefficient_interpolation_method
+            if method == 'cubic' and np.count_nonzero(~mask) < 3:
+                method = 'nearest'
+
+            try:
+                image = _interpolate_missing_data(image, mask=mask,
+                                                  method=method)
+            except (ValueError, RuntimeError, QhullError):
+                image = _interpolate_missing_data(coeff_data[idx], mask=mask,
+                                                  method='nearest')
+
+            remaining = ~np.isfinite(image)
+            if np.any(remaining):
+                image = _interpolate_missing_data(image, mask=remaining,
+                                                  method='nearest')
+            coeff_data[idx] = image
+
+        coeff_data[~np.isfinite(coeff_data)] = 0.0
+        return coeff_data
+
+    def _underconstrained_residual_mask(self, residuals, x_coords=None,
+                                        y_coords=None):
+        _, ny, nx = residuals.shape
+        mask = np.zeros((ny, nx), dtype=bool)
+        use_offsets = x_coords is not None and y_coords is not None
+        for iy in range(ny):
+            for ix in range(nx):
+                valid = np.isfinite(residuals[:, iy, ix])
+                if use_offsets:
+                    valid &= (np.isfinite(x_coords[:, iy, ix])
+                              & np.isfinite(y_coords[:, iy, ix]))
+                mask[iy, ix] = (np.count_nonzero(valid)
+                                < self.residual_min_valid_samples)
+        return mask
+
     def _fit_residual_coefficients(self, residuals, det_x, det_y,
                                    x_coords=None, y_coords=None):
         """
@@ -1280,7 +1342,7 @@ class SpatialEPSFBuilder:
                                  epsf_class=self.epsf_class).basis_vector(
                                      det_x, det_y)
         _, ny, nx = residuals.shape
-        coeff_update = np.zeros((nbasis, ny, nx), dtype=float)
+        coeff_update = np.full((nbasis, ny, nx), np.nan, dtype=float)
         use_offsets = x_coords is not None and y_coords is not None
         xcenter = nx // 2
         ycenter = ny // 2
@@ -1324,7 +1386,7 @@ class SpatialEPSFBuilder:
                 coeffs, _, _, _ = np.linalg.lstsq(design, z_fit, rcond=None)
                 coeff_update[:, iy, ix] = coeffs[:nbasis]
 
-        return coeff_update
+        return self._interpolate_missing_coefficient_images(coeff_update)
 
     def _residual_offset_terms(self, dx, dy, ix, iy, nx, ny):
         """

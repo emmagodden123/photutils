@@ -240,6 +240,9 @@ def test_epsfbuilder_inputs():
     match = 'residual_min_valid_samples must be a positive integer'
     with pytest.raises(ValueError, match=match):
         EPSFBuilder(residual_min_valid_samples=0)
+    match = "pixel_interpolation_method must be 'cubic' or 'nearest'"
+    with pytest.raises(ValueError, match=match):
+        EPSFBuilder(pixel_interpolation_method='invalid')
     with pytest.raises(TypeError, match='unexpected keyword argument'):
         EPSFBuilder(convergence_mode='model')
     with pytest.raises(TypeError, match='unexpected keyword argument'):
@@ -287,6 +290,9 @@ def test_epsfbuilder_inputs():
     EPSFBuilder(plot_diagnostics=False)
     EPSFBuilder(residual_star_rms_clip=None, residual_outlier_clip=3.0,
                 residual_min_valid_samples=3, residual_despike=False)
+    EPSFBuilder(interpolate_missing_pixels=False)
+    EPSFBuilder(pixel_interpolation_method='nearest')
+    assert builder.interpolate_missing_pixels
     assert not hasattr(builder, 'convergence_mode')
     assert not hasattr(builder, 'center_convergence_percentile')
     assert not hasattr(builder, 'epsf_change_tolerance')
@@ -315,6 +321,32 @@ def test_epsfbuilder_inputs():
     assert builder.calibrate_ppe == ('Flux', 'Position')
     assert builder.constrain_stars == ('Flux', 'Position')
     assert builder.plot_diagnostics is True
+
+
+def test_epsfbuilder_interpolate_missing_residual_pixels():
+    builder = EPSFBuilder(oversampling=2, maxiters=1, progress_bar=False,
+                          pixel_interpolation_method='nearest')
+    residuals = np.array([[1.0, 2.0, 3.0],
+                          [4.0, np.nan, 6.0],
+                          [7.0, 8.0, 9.0]])
+
+    result = builder._interpolate_missing_residual_pixels(residuals)
+
+    assert np.all(np.isfinite(result))
+    assert result[1, 1] in residuals[np.isfinite(residuals)]
+    mask = ~np.isnan(residuals)
+    assert_allclose(result[mask], residuals[mask])
+
+
+def test_epsfbuilder_missing_residual_pixels_can_remain_unchanged():
+    builder = EPSFBuilder(oversampling=2, maxiters=1, progress_bar=False,
+                          interpolate_missing_pixels=False)
+    residuals = np.array([[1.0, np.nan],
+                          [3.0, 4.0]])
+
+    result = builder._interpolate_missing_residual_pixels(residuals)
+
+    assert_allclose(result, [[1.0, 0.0], [3.0, 4.0]])
 
 
 def test_resample_epsf_anisotropic_grid():

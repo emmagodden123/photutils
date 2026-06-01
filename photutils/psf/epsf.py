@@ -17,6 +17,7 @@ from astropy.convolution import Gaussian2DKernel
 from astropy.stats import sigma_clipped_stats
 from astropy.utils.exceptions import AstropyUserWarning
 from scipy.ndimage import convolve, label, median_filter
+from scipy.spatial import QhullError
 
 from photutils.centroids import centroid_com
 from photutils.psf.epsf_stars import EPSFStar, EPSFStars, LinkedEPSFStar
@@ -325,8 +326,17 @@ class EPSFBuilder:
 
     residual_min_valid_samples : int, optional
         Minimum number of valid residual samples required to update an
-        oversampled grid cell. Cells with fewer samples are left
-        unchanged for that iteration.
+        oversampled grid cell.
+
+    interpolate_missing_pixels : bool, optional
+        Whether to interpolate residual values for oversampled pixels
+        with fewer than ``residual_min_valid_samples`` samples from
+        nearby valid pixels. If `False`, missing residual values are set
+        to zero, leaving those pixels unchanged for that iteration.
+
+    pixel_interpolation_method : {'cubic', 'nearest'}, optional
+        Interpolation method used when ``interpolate_missing_pixels`` is
+        `True`.
 
     residual_despike : bool, optional
         Whether to apply a local despiking step to the stacked residual
@@ -360,6 +370,8 @@ class EPSFBuilder:
                  residual_star_rms_clip=3.0,
                  residual_outlier_clip=3.0,
                  residual_min_valid_samples=5,
+                 interpolate_missing_pixels=True,
+                 pixel_interpolation_method='cubic',
                  residual_despike=True,
                  plot_diagnostics=True,):
 
@@ -478,6 +490,12 @@ class EPSFBuilder:
             msg = 'residual_min_valid_samples must be a positive integer'
             raise ValueError(msg)
         self.residual_min_valid_samples = residual_min_valid_samples
+
+        self.interpolate_missing_pixels = bool(interpolate_missing_pixels)
+        self.pixel_interpolation_method = pixel_interpolation_method
+        if self.pixel_interpolation_method not in ('cubic', 'nearest'):
+            msg = "pixel_interpolation_method must be 'cubic' or 'nearest'"
+            raise ValueError(msg)
 
         self.residual_despike = bool(residual_despike)
 
@@ -959,6 +977,42 @@ class EPSFBuilder:
 
         return combined, counts
 
+    def _interpolate_missing_residual_pixels(self, residuals):
+        """
+        Fill missing residual pixels in the oversampled ePSF grid.
+        """
+        residuals = np.array(residuals, copy=True, dtype=float)
+        mask = ~np.isfinite(residuals)
+        if not np.any(mask):
+            return residuals
+
+        if not self.interpolate_missing_pixels:
+            residuals[mask] = 0.0
+            return residuals
+
+        if np.all(mask):
+            residuals[:] = 0.0
+            return residuals
+
+        method = self.pixel_interpolation_method
+        if method == 'cubic' and np.count_nonzero(~mask) < 3:
+            method = 'nearest'
+
+        try:
+            residuals = _interpolate_missing_data(residuals, mask=mask,
+                                                  method=method)
+        except (ValueError, RuntimeError, QhullError):
+            residuals = _interpolate_missing_data(residuals, mask=mask,
+                                                  method='nearest')
+
+        remaining = ~np.isfinite(residuals)
+        if np.any(remaining):
+            residuals = _interpolate_missing_data(residuals, mask=remaining,
+                                                  method='nearest')
+
+        residuals[~np.isfinite(residuals)] = 0.0
+        return residuals
+
     def _despike_residuals(self, residuals):
         """
         Replace isolated hot residual cells with the local median.
@@ -1151,12 +1205,11 @@ class EPSFBuilder:
 
         residuals, residual_counts = self._combine_residual_stack(
             residuals, weights, x_coords, y_coords)
+        residuals = self._interpolate_missing_residual_pixels(residuals)
         
         if self.plot_diagnostics:
             self._plot_residual_image(residuals)
 
-        # Leave underconstrained cells unchanged in this iteration.
-        residuals[~np.isfinite(residuals)] = 0.0
         if iter_num is None or iter_num >= 2:
             residuals = self._despike_residuals(residuals)
 
