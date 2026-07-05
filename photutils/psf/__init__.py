@@ -5,6 +5,7 @@ photometry.
 """
 
 from .epsf import *  # noqa: F401, F403
+from .epsf_model_error import *  # noqa: F401, F403
 from .epsf_stars import *  # noqa: F401, F403
 from .flags import *  # noqa: F401, F403
 from .functional_models import *  # noqa: F401, F403

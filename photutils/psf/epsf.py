@@ -80,7 +80,7 @@ class EPSFFitter:
                 del fitter_kwargs[kwarg]
         self.fitter_kwargs = fitter_kwargs
 
-    def __call__(self, epsf, stars):
+    def __call__(self, epsf, stars, *, epsf_error_map=None):
         """
         Fit an ePSF model to stars.
 
@@ -94,6 +94,10 @@ class EPSFFitter:
             should be as close as possible to actual centers. For stars
             than contain weights, a weighted fit of the ePSF to the star
             will be performed.
+
+        epsf_error_map : `EPSFErrorMap`, optional
+            An ePSF error map used to augment the pixel weights with an
+            extra model-noise term in data units.
 
         Returns
         -------
@@ -109,6 +113,12 @@ class EPSFFitter:
             msg = 'The input epsf must be an ImagePSF'
             raise TypeError(msg)
 
+        if epsf_error_map is not None:
+            from photutils.psf.epsf_model_error import EPSFErrorMap
+            if not isinstance(epsf_error_map, EPSFErrorMap):
+                msg = 'epsf_error_map must be an EPSFErrorMap instance'
+                raise TypeError(msg)
+
         # perform the fit
         fitted_stars = []
         for star in stars:
@@ -118,7 +128,8 @@ class EPSFFitter:
                 fitted_star = self._fit_star(_epsf, star, self.fitter,
                                              self.fitter_kwargs,
                                              self.fitter_has_fit_info,
-                                             self.fit_boxsize)
+                                             self.fit_boxsize,
+                                             epsf_error_map=epsf_error_map)
 
             elif isinstance(star, LinkedEPSFStar):
                 fitted_star = []
@@ -129,7 +140,8 @@ class EPSFFitter:
                         self._fit_star(_epsf, linked_star, self.fitter,
                                        self.fitter_kwargs,
                                        self.fitter_has_fit_info,
-                                       self.fit_boxsize))
+                                       self.fit_boxsize,
+                                       epsf_error_map=epsf_error_map))
 
                 fitted_star = LinkedEPSFStar(fitted_star)
 
@@ -143,7 +155,7 @@ class EPSFFitter:
         return EPSFStars(fitted_stars)
 
     def _fit_star(self, epsf, star, fitter, fitter_kwargs,
-                  fitter_has_fit_info, fit_boxsize):
+                  fitter_has_fit_info, fit_boxsize, *, epsf_error_map=None):
         """
         Fit an ePSF model to a single star.
 
@@ -182,6 +194,10 @@ class EPSFFitter:
             # define the origin of the fitting region
             x0 = 0
             y0 = 0
+
+        if epsf_error_map is not None:
+            weights = self._augment_weights_with_epsf_error(
+                weights, star, data.shape, x0, y0, epsf_error_map)
 
         # Define positions in the undersampled grid. The fitter will
         # evaluate on the defined interpolation grid, currently in the
@@ -227,6 +243,72 @@ class EPSFFitter:
             star._fit_error_status = fit_error_status
 
         return star
+
+    def _augment_weights_with_epsf_error(
+        self,
+        weights,
+        star,
+        data_shape,
+        x0,
+        y0,
+        epsf_error_map,
+    ):
+        """
+        Add ePSF model-error variance to the fit weights.
+
+        Parameters
+        ----------
+        weights : ndarray
+            Existing inverse-standard-deviation weights (1/sigma).
+
+        Returns
+        -------
+        augmented_weights : ndarray
+            Updated inverse-standard-deviation weights.
+        """
+        yy, xx = np.indices(data_shape, dtype=float)
+
+        # detector-pixel offsets relative to fitted centroid
+        xx = xx + x0 - star.cutout_center[0]
+        yy = yy + y0 - star.cutout_center[1]
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            # recover variance from inverse-sigma weights
+            data_variance = 1.0 / np.square(weights)
+
+            # variance of normalized ePSF model
+            epsf_error_variance = epsf_error_map.evaluate_variance(
+                xx,
+                yy,
+            )
+
+            epsf_error_variance = np.asarray(
+                epsf_error_variance,
+                dtype=float,
+            )
+
+            epsf_error_variance = np.where(
+                np.isfinite(epsf_error_variance),
+                epsf_error_variance,
+                0.0,
+            )
+
+            # convert normalized-ePSF variance into data units
+            model_variance = star.flux**2 * epsf_error_variance
+
+            total_variance = data_variance + model_variance
+
+            augmented_weights = 1.0 / np.sqrt(total_variance)
+
+        augmented_weights = np.asarray(
+            augmented_weights,
+            dtype=float,
+        )
+
+        augmented_weights[~np.isfinite(augmented_weights)] = 0.0
+        augmented_weights[weights <= 0.0] = 0.0
+
+        return augmented_weights
 
 
 class EPSFBuilder:
