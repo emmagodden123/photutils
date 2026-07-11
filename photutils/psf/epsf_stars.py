@@ -80,7 +80,8 @@ class EPSFStar:
 
     def __init__(self, data, *, weights=None, cutout_center=None,
                  origin=(0, 0), wcs_large=None, id_label=None,
-                 frame_id=None, exposure_time=None, fwhm=None):
+                 frame_id=None, exposure_time=None, fwhm=None,
+                 flux=None):
 
         self._data = np.asanyarray(data)
         self.shape = self._data.shape
@@ -126,7 +127,10 @@ class EPSFStar:
                                  'or None')
             self.fwhm = fwhm
 
-        self.flux = self.estimate_flux()
+        if flux is None:
+            self.flux = self.estimate_flux()
+        else:
+            self.flux = float(flux)
 
         self._excluded_from_fit = False
         self._fitinfo = None
@@ -417,16 +421,23 @@ class EPSFStars:
                 continue
             linked_star.constrain_fluxes()
 
-    def constrain_linked_centres(self):
-        """ Constrain the centres of any `LinkedEPSFStar` objects in this list 
-        to have the same sky coordinates. The single sky coordinate is 
+    def constrain_linked_centres(self, remove_outliers=False):
+        """
+        Constrain the centres of any `LinkedEPSFStar` objects in this list
+        to have the same sky coordinates. The single sky coordinate is
         calculated as the mean of sky coordinates of the linked stars.
+
+        Parameters
+        ----------
+        remove_outliers : bool, optional
+            If `True`, iteratively sigma-clip linked-star center distances
+            before calculating the mean sky coordinate.
         """
 
         for linked_star in self._data:
             if not isinstance(linked_star, LinkedEPSFStar):
                 continue
-            linked_star.constrain_centers()
+            linked_star.constrain_centers(remove_outliers=remove_outliers)
 
     @property
     def cutout_center_flat(self):
@@ -552,7 +563,7 @@ class LinkedEPSFStar(EPSFStars):
 
         super().__init__(stars_list)
 
-    def constrain_centers(self):
+    def constrain_centers(self, remove_outliers=False):
         """
         Constrain the centers of linked `EPSFStar` objects (i.e., the
         same physical star) to have the same sky coordinate.
@@ -562,6 +573,13 @@ class LinkedEPSFStar(EPSFStars):
 
         The single sky coordinate is calculated as the mean of sky
         coordinates of the linked stars.
+
+        Parameters
+        ----------
+        remove_outliers : bool, optional
+            If `True`, iteratively sigma-clip linked-star center distances
+            from the current mean sky coordinate before recalculating the
+            mean. Outlier stars are not recentered.
         """
         if len(self._data) < 2:  # no linked stars
             return
@@ -587,9 +605,47 @@ class LinkedEPSFStar(EPSFStars):
         lon, lat = np.transpose(coords)
         lon *= np.pi / 180.0
         lat *= np.pi / 180.0
-        x_mean = np.mean(np.cos(lat) * np.cos(lon))
-        y_mean = np.mean(np.cos(lat) * np.sin(lon))
-        z_mean = np.mean(np.sin(lat))
+        x = np.cos(lat) * np.cos(lon)
+        y = np.cos(lat) * np.sin(lon)
+        z = np.sin(lat)
+        x_mean = np.mean(x)
+        y_mean = np.mean(y)
+        z_mean = np.mean(z)
+
+        if remove_outliers:
+            # compute distances from mean cartesian coordinates
+            distances = np.sqrt(
+                (x - x_mean) ** 2 + (y - y_mean) ** 2 + (z - z_mean) ** 2
+            )
+
+            # find distance outliers with iterative sigma-clipping
+            keep = np.ones(distances.shape, dtype=bool)
+            for _ in range(10):
+                if np.count_nonzero(keep) < 3:
+                    break
+                clipped_distances = distances[keep]
+                center = np.median(clipped_distances)
+                scale = np.std(clipped_distances)
+                if not np.isfinite(scale) or scale <= 0.0:
+                    break
+                threshold = center + 3.0 * scale
+                keep_new = keep & (distances <= threshold)
+                if np.array_equal(keep, keep_new):
+                    break
+                if not np.any(keep_new):
+                    break
+                keep = keep_new
+
+            if np.any(keep) and not np.all(keep):
+                # update mean cartesian coordinates after outlier rejection
+                x_mean = np.mean(x[keep])
+                y_mean = np.mean(y[keep])
+                z_mean = np.mean(z[keep])
+
+                # remove outlier stars from good stars
+                good_stars = [star for star, keep_star in
+                              zip(good_stars, keep, strict=True)
+                              if keep_star]
 
         # convert mean cartesian coordinates back to spherical
         hypot = np.hypot(x_mean, y_mean)

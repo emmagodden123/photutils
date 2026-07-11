@@ -1754,14 +1754,24 @@ class EPSFBuilder:
                                        apply_position=apply_position,
                                        flux_damping=flux_damping)
 
-    def _apply_linked_star_constraints(self, stars):
+    def _apply_linked_star_constraints(self, stars, refit_flux=True):
         """
         Apply the configured linked-star constraints.
+
+        If refit_flux is true, then the fluxes of stars are re-fit with their constrained positions, then the fluxes are constrained.
         """
         if 'Position' in self.constrain_stars:
             stars.constrain_linked_centres()
+
+        if refit_flux and self.current_epsf is not None:
+            epsf = self.current_epsf.deepcopy()
+            epsf.x_0.fixed = True
+            epsf.y_0.fixed = True
+            stars = self.fitter(epsf, stars)
+
         if 'Flux' in self.constrain_stars:
             stars.constrain_linked_fluxes()
+
         return stars
 
     def _get_init_epsf(self, epsf):
@@ -1815,10 +1825,13 @@ class EPSFBuilder:
 
         if epsf is None:
             legacy_epsf = None
+            self.current_epsf = None
         else:
             legacy_epsf = self.epsf_class(epsf.data, flux=epsf.flux,
                                            x_0=epsf.x_0, y_0=epsf.y_0, origin=epsf.origin,
                                            oversampling=epsf.oversampling)
+            self.current_epsf = legacy_epsf.deepcopy()
+
             
         # Initial fit of the ePSF to the stars
         if legacy_epsf is not None:
@@ -1844,7 +1857,7 @@ class EPSFBuilder:
             stars = self._apply_ppe_corrections(stars, ppe_map, iteration=0)
 
         if self.constrain_stars:
-            stars = self._apply_linked_star_constraints(stars)
+            stars = self._apply_linked_star_constraints(stars, refit_flux=True)
 
         converged = False
         while iter_num < self.maxiters and not np.all(fit_failed):
@@ -1865,12 +1878,14 @@ class EPSFBuilder:
                 stars = self._apply_ppe_corrections(stars, ppe_map,
                                                 iteration=iter_num)
             if self.constrain_stars:
-                stars = self._apply_linked_star_constraints(stars)
+                stars = self._apply_linked_star_constraints(stars, refit_flux=True)
 
 
             # build/improve the ePSF
             legacy_epsf = self._build_epsf_step(stars, epsf=legacy_epsf,
                                                 iter_num=iter_num)
+            
+            self.current_epsf = legacy_epsf.deepcopy()
 
             # fit the new ePSF to the stars to find improved centers
             # we catch fit warnings here -- stars with unsuccessful fits
@@ -1906,6 +1921,64 @@ class EPSFBuilder:
                 for i in idx:  # pylint: disable=not-an-iterable
                     stars.all_stars[i]._excluded_from_fit = True
 
+            # Find the stars which have outlier fitting errors - probably bad stars
+            # NOTE: Only do after 3 iterations
+            if iter_num > 3:
+                sigma_ff = []
+                sigma_x = []
+                sigma_y = []
+                for star in stars.all_good_stars:
+                    s_ff = None
+                    s_x = None
+                    s_y = None
+                    if hasattr(star, '_fit_info'):
+                        if "param_cov" in star._fit_info.keys():
+                            cov = star._fit_info["param_cov"]
+                            if cov is not None:
+                                s_ff = np.sqrt(cov[0, 0]) / star.flux
+                                s_x = np.sqrt(cov[1, 1])
+                                s_y = np.sqrt(cov[2, 2])
+                            else:
+                                jac = star._fit_info["jac"]
+                                cost = star._fit_info["cost"]
+                                n_data, n_par = jac.shape
+                                sigma2 = 2 * cost / (n_data - n_par)
+                                try:
+                                    cov = sigma2 * np.linalg.inv(jac.T @ jac)
+                                    s_ff = np.sqrt(cov[0, 0]) / star.flux
+                                    s_x = np.sqrt(cov[1, 1])
+                                    s_y = np.sqrt(cov[2, 2])
+                                except np.linalg.LinAlgError:
+                                    cov = None
+
+                    sigma_ff.append(s_ff)
+                    sigma_x.append(s_x)
+                    sigma_y.append(s_y)
+                
+                sigma_ff = np.asarray(sigma_ff, dtype=float)
+                sigma_x = np.asarray(sigma_x, dtype=float)
+                sigma_y = np.asarray(sigma_y, dtype=float)
+
+                # 99th-percentile thresholds using only finite values
+                ff_lim = np.nanpercentile(sigma_ff[np.isfinite(sigma_ff)], 99)
+                sx_lim = np.nanpercentile(sigma_x[np.isfinite(sigma_x)], 99)
+                sy_lim = np.nanpercentile(sigma_y[np.isfinite(sigma_y)], 99)
+
+                bad = (
+                    ~np.isfinite(sigma_ff)
+                    | ~np.isfinite(sigma_x)
+                    | ~np.isfinite(sigma_y)
+                    | (sigma_ff > ff_lim)
+                    | (sigma_x > sx_lim)
+                    | (sigma_y > sy_lim)
+                )
+
+                good_stars = list(stars.all_good_stars)
+                for star, is_bad in zip(good_stars, bad):
+                    if is_bad:
+                        star._excluded_from_fit = True
+
+                        
             # if no star centers have moved by more than pixel accuracy,
             # stop the iteration loop early
             dx_dy = stars.cutout_center_flat - centers
