@@ -3,8 +3,11 @@
 Tests for experimental spatial ePSF classes.
 """
 
+import warnings
+
 import numpy as np
 import pytest
+from astropy.utils.exceptions import AstropyUserWarning
 from numpy.testing import assert_allclose
 
 from photutils.centroids import centroid_com
@@ -30,6 +33,28 @@ class _ShiftFitter:
         model.x_0 = float(shift)
         model.y_0 = 0.0
         model.flux = float(model.flux.value)
+        return model
+
+
+class _WarningFitter:
+    fit_info = {'ierr': 5}
+
+    def __call__(self, model, x, y, z, weights=None, **kwargs):
+        warnings.warn('maximum number of iterations reached',
+                      AstropyUserWarning)
+        return model
+
+
+class _WarnButIerrOkFitter:
+    fit_info = {'ierr': 1}
+
+    def __call__(self, model, x, y, z, weights=None, **kwargs):
+        model.x_0 = 0.4
+        model.y_0 = 0.0
+        model.flux = float(model.flux.value)
+        warnings.warn('The fit may be unsuccessful; check: '\
+                      'The maximum number of function evaluations is '
+                      'exceeded.', AstropyUserWarning)
         return model
 
 
@@ -83,6 +108,53 @@ def test_spatial_epsf_fitter_applies_model_weight_map():
     assert_allclose(fitter_backend.received_weights[0], 0.25)
 
 
+def test_spatial_epsf_fitter_warns_once_for_overlap_failures():
+    stars = EPSFStars([
+        EPSFStar(np.ones((3, 3), dtype=float), cutout_center=(1.0, 1.0)),
+        EPSFStar(np.ones((3, 3), dtype=float), cutout_center=(1.0, 1.0)),
+    ])
+    fitter = SpatialEPSFFitter(fitter=_ShiftFitter(shifts=[0.0]),
+                               fit_boxsize=5)
+
+    with pytest.warns(AstropyUserWarning,
+                      match='2 star\\(s\\) could not be fit') as warning_info:
+        fitted = fitter(_make_spatial_model(), stars)
+
+    assert len(warning_info) == 1
+    assert_allclose([star._fit_error_status for star in fitted], [1, 1])
+
+
+def test_spatial_epsf_fitter_aggregates_fitter_warnings():
+    star = EPSFStar(np.ones((5, 5), dtype=float),
+                    weights=np.ones((5, 5), dtype=float),
+                    cutout_center=(2.0, 2.0))
+    stars = EPSFStars([star])
+    fitter = SpatialEPSFFitter(fitter=_WarningFitter(), fit_boxsize=None)
+
+    with pytest.warns(AstropyUserWarning,
+                      match='may not have been fit successfully') as warning_info:
+        fitted = fitter(_make_spatial_model(), stars)
+
+    messages = [str(warning.message) for warning in warning_info]
+    assert any('fitter emitted warning' in message for message in messages)
+    assert fitted[0]._fit_error_status == 2
+
+
+def test_spatial_epsf_fitter_warning_pattern_marks_failure():
+    star = EPSFStar(np.ones((5, 5), dtype=float),
+                    weights=np.ones((5, 5), dtype=float),
+                    cutout_center=(2.0, 2.0))
+    stars = EPSFStars([star])
+    fitter = SpatialEPSFFitter(fitter=_WarnButIerrOkFitter(), fit_boxsize=None)
+
+    with pytest.warns(AstropyUserWarning,
+                      match='may not have been fit successfully'):
+        fitted = fitter(_make_spatial_model(), stars)
+
+    assert fitted[0]._fit_error_status == 2
+    assert_allclose(fitted[0].cutout_center, (2.0, 2.0), atol=1.0e-12)
+
+
 def test_spatial_epsf_fitter_reweights_with_updated_center():
     star = EPSFStar(np.ones((5, 5), dtype=float),
                     weights=np.ones((5, 5), dtype=float),
@@ -106,6 +178,24 @@ def test_spatial_epsf_fitter_reweights_with_updated_center():
     assert centers_seen[0] == (2.0, 2.0)
     assert_allclose(centers_seen[1], (2.4, 2.0), atol=1.0e-12)
     assert_allclose(fitted[0].cutout_center, (2.4, 2.0), atol=1.0e-12)
+
+
+def test_spatial_epsf_fitter_rejects_large_center_shifts():
+    star = EPSFStar(np.ones((7, 7), dtype=float),
+                    weights=np.ones((7, 7), dtype=float),
+                    cutout_center=(3.0, 3.0))
+    stars = EPSFStars([star])
+
+    fitter_backend = _ShiftFitter(shifts=[2.0])
+    fitter = SpatialEPSFFitter(fitter=fitter_backend, fit_boxsize=3,
+                               model_weight_map=None)
+
+    with pytest.warns(AstropyUserWarning,
+                      match='may not have been fit successfully'):
+        fitted = fitter(_make_spatial_model(), stars)
+
+    assert fitted[0]._fit_error_status == 2
+    assert_allclose(fitted[0].cutout_center, (3.0, 3.0), atol=1.0e-12)
 
 
 def test_spatial_epsf_fitter_model_weight_map_shape_validation():
@@ -285,6 +375,58 @@ def test_spatial_epsf_builder_interpolates_missing_coefficients():
     assert result[0, 0, 1] in (1.0, 3.0, 4.0)
 
 
+def test_spatial_epsf_builder_warns_when_interpolation_not_possible():
+    builder = SpatialEPSFBuilder(detector_shape=(10, 10), degree=0,
+                                 residual_min_valid_samples=3)
+    residuals = np.ones((2, 2, 2), dtype=float)
+    det_x = np.array([1.0, 2.0])
+    det_y = np.array([1.0, 2.0])
+
+    with pytest.warns(AstropyUserWarning,
+                      match='Insufficient sources|Interpolation is not possible') as warning_info:
+        coeff = builder._fit_residual_coefficients(residuals, det_x, det_y)
+
+    messages = [str(warning.message) for warning in warning_info]
+    assert any('Interpolation is not possible' in message
+               for message in messages)
+    assert_allclose(coeff, 0.0)
+
+
+def test_spatial_epsf_builder_sparse_sections_have_zero_update():
+    builder = SpatialEPSFBuilder(detector_shape=(10, 10), degree=0,
+                                 residual_min_valid_samples=2,
+                                 coefficient_interpolation_method='nearest')
+    residuals = np.ones((3, 2, 2), dtype=float)
+    residuals[1:, 0, 0] = np.nan
+    det_x = np.array([1.0, 2.0, 3.0])
+    det_y = np.array([1.0, 2.0, 3.0])
+
+    with pytest.warns(AstropyUserWarning, match='Insufficient sources'):
+        coeff = builder._fit_residual_coefficients(residuals, det_x, det_y)
+    assert_allclose(coeff[:, 0, 0], 0.0)
+
+
+def test_spatial_epsf_builder_skips_underdetermined_residual_solves():
+    builder = SpatialEPSFBuilder(detector_shape=(10, 10), degree=2,
+                                 residual_min_valid_samples=5,
+                                 coefficient_interpolation_method='nearest')
+
+    # With degree=2 and offset terms enabled, the residual fit has more
+    # model parameters than samples here; cells must be skipped and zeroed.
+    residuals = np.ones((6, 3, 3), dtype=float)
+    det_x = np.linspace(1.0, 6.0, 6)
+    det_y = np.linspace(1.5, 6.5, 6)
+    x_coords = np.zeros_like(residuals)
+    y_coords = np.zeros_like(residuals)
+
+    with pytest.warns(AstropyUserWarning,
+                      match='Insufficient sources|Interpolation is not possible'):
+        coeff = builder._fit_residual_coefficients(
+            residuals, det_x, det_y, x_coords=x_coords, y_coords=y_coords)
+
+    assert_allclose(coeff, 0.0)
+
+
 def test_spatial_epsf_builder_residual_outlier_clip_validation():
     with pytest.raises(ValueError,
                        match='residual_outlier_clip must be positive or None'):
@@ -294,6 +436,22 @@ def test_spatial_epsf_builder_residual_outlier_clip_validation():
     builder = SpatialEPSFBuilder(detector_shape=(100, 100),
                                  residual_outlier_clip=None)
     assert builder._sigma_clip is None
+
+
+def test_spatial_epsf_builder_residual_update_fraction_validation():
+    with pytest.raises(ValueError,
+                       match=r'residual_update_fraction must be in \(0, 1\]'):
+        SpatialEPSFBuilder(detector_shape=(100, 100),
+                           residual_update_fraction=0.0)
+
+    with pytest.raises(ValueError,
+                       match=r'residual_update_fraction must be in \(0, 1\]'):
+        SpatialEPSFBuilder(detector_shape=(100, 100),
+                           residual_update_fraction=1.5)
+
+    builder = SpatialEPSFBuilder(detector_shape=(100, 100),
+                                 residual_update_fraction=0.35)
+    assert builder.residual_update_fraction == 0.35
 
 
 def test_spatial_epsf_builder_infers_ppe_settings_from_main_settings():
@@ -352,6 +510,52 @@ def test_spatial_epsf_builder_select_residual_stars_rms_clip(monkeypatch):
     assert kept_ids == ['good0', 'good1', 'good2']
 
 
+def test_spatial_epsf_builder_select_residual_stars_keeps_empty_selection(monkeypatch):
+    stars = EPSFStars([
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='bad0'),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='bad1'),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='bad2'),
+    ])
+
+    def fake_compute_residual_image(self, local_epsf):
+        return np.full(self.shape, 10.0 * self.flux, dtype=float)
+
+    monkeypatch.setattr(EPSFStar, 'compute_residual_image',
+                        fake_compute_residual_image)
+
+    builder = SpatialEPSFBuilder(detector_shape=(100, 100), oversampling=1,
+                                 degree=0, residual_star_rms_clip=1.0)
+    monkeypatch.setattr(builder, '_mad_std', lambda data: -1.0)
+    selected = builder._select_residual_stars(stars, _make_spatial_model())
+
+    assert selected.n_good_stars == 0
+    assert [star.id_label for star in selected.all_good_stars] == []
+    assert all(star._excluded_from_fit for star in selected.all_stars)
+
+
+def test_spatial_epsf_builder_select_residual_stars_excludes_fit_failures():
+    stars = EPSFStars([
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='ok0'),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='fail'),
+        EPSFStar(np.ones((5, 5), dtype=float), cutout_center=(2.0, 2.0),
+                 id_label='ok1'),
+    ])
+    stars.all_stars[1]._fit_error_status = 2
+
+    builder = SpatialEPSFBuilder(detector_shape=(100, 100), oversampling=1,
+                                 degree=0, residual_star_rms_clip=None)
+    selected = builder._select_residual_stars(stars, _make_spatial_model())
+
+    kept_ids = [star.id_label for star in selected.all_good_stars]
+    assert kept_ids == ['ok0', 'ok1']
+    assert selected.all_stars[1]._excluded_from_fit
+
+
 def test_spatial_epsf_builder_calibrate_and_constrain_api():
     builder = SpatialEPSFBuilder(detector_shape=(100, 100),
                                  calibrate_ppe=('Position',),
@@ -398,6 +602,16 @@ def test_spatial_epsf_fitter_backward_compatible_without_trust_map_attr():
 
     assert fitter_backend.calls == 1
     assert fitted[0]._fit_error_status == 0
+
+
+def test_spatial_epsf_fitter_sets_default_trf_maxiter():
+    fitter = SpatialEPSFFitter()
+    assert fitter.fitter_kwargs['maxiter'] == 200
+
+
+def test_spatial_epsf_fitter_respects_user_maxiter():
+    fitter = SpatialEPSFFitter(maxiter=250)
+    assert fitter.fitter_kwargs['maxiter'] == 250
 
 
 def test_spatial_epsf_fitter_accepts_ndarray_fit_boxsize():

@@ -361,7 +361,8 @@ class ImagePSF(Fittable2DModel):
             # RegularGridInterpolator bounds
             ny, nx = self.data.shape
             invalid = (xi < 0) | (xi > nx - 1) | (yi < 0) | (yi > ny - 1)
-            evaluated_model[invalid] = self.fill_value
+            evaluated_model = np.where(invalid, self.fill_value,
+                                       evaluated_model)
 
         return evaluated_model
     

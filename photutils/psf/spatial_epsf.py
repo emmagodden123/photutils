@@ -67,12 +67,20 @@ class SpatialEPSFModel:
 
     origin, fill_value : optional
         Passed through to local `ImagePSF` models.
+
+    local_norm_box : int or tuple of int, optional
+        The native-pixel ``(ny, nx)`` box size used when computing the
+        local ePSF normalization factor. If `None`, then the box size is
+        inferred from ``data.shape / oversampling`` (the historical
+        behavior).
     """
 
     def __init__(self, coeff_data, *, oversampling, detector_shape,
                  degree=1, origin=None, fill_value=0.0,
                  detector_origin=None, detector_span=None,
-                 normalize_local_epsf=True, trust_map=None,
+                 normalize_local_epsf=True, enforce_nonnegative=False,
+                 trust_map=None,
+                 local_norm_box=None,
                  epsf_class=ImagePSF):
         self.coeff_data = np.asanyarray(coeff_data, dtype=float)
         if self.coeff_data.ndim != 3:
@@ -108,6 +116,12 @@ class SpatialEPSFModel:
         self.origin = origin
         self.fill_value = fill_value
         self.normalize_local_epsf = bool(normalize_local_epsf)
+        self.enforce_nonnegative = bool(enforce_nonnegative)
+        if local_norm_box is None:
+            self.local_norm_box = None
+        else:
+            self.local_norm_box = as_pair('local_norm_box', local_norm_box,
+                                          lower_bound=(1, 1))
         self.epsf_class = epsf_class
         if isinstance(self.epsf_class, partial):
             candidate = self.epsf_class.func
@@ -173,6 +187,8 @@ class SpatialEPSFModel:
         Create a local `ImagePSF` for detector position ``(x, y)``.
         """
         data = self.local_epsf_data(x, y)
+        if getattr(self, 'enforce_nonnegative', False):
+            data = np.clip(data, 0.0, None)
         if self.normalize_local_epsf:
             data = self._normalise_local_epsf_data(data)
         image_psf = self.epsf_class(data=data, oversampling=self.oversampling,
@@ -372,9 +388,13 @@ class SpatialEPSFModel:
         epsf = self.epsf_class(data=data, oversampling=self.oversampling,
                                origin=self.origin, fill_value=self.fill_value)
 
-        box_size = np.asarray(np.asarray(data.shape) / self.oversampling,
-                              dtype=int)
-        box_size = np.where(box_size < 3, 3, box_size)
+        box_size = getattr(self, 'local_norm_box', None)
+        if box_size is None:
+            box_size = np.asarray(np.asarray(data.shape) / self.oversampling,
+                                  dtype=int)
+            box_size = np.where(box_size < 3, 3, box_size)
+        else:
+            box_size = np.asarray(box_size, dtype=int)
         half_x = int(np.floor(box_size[1] / 2))
         half_y = int(np.floor(box_size[0] / 2))
         norm_x = np.arange(-half_x, half_x + 1)
@@ -481,6 +501,7 @@ class SpatialEPSFFitter:
     def __init__(self, *, fitter=None, fit_boxsize=3, progress_bar=False,
                  plot_fit_checks=False, model_weight_map=None,
                  model_weight_maxiters=1, model_weight_center_tol=1.0e-3,
+                 max_center_shift=None,
                  **fitter_kwargs):
         if fitter is None:
             fitter = TRFLSQFitter()
@@ -526,10 +547,36 @@ class SpatialEPSFFitter:
         if self.model_weight_center_tol < 0.0:
             raise ValueError('model_weight_center_tol must be >= 0')
 
+        self.max_center_shift = max_center_shift
+        if self.max_center_shift is not None:
+            self.max_center_shift = float(self.max_center_shift)
+            if (not np.isfinite(self.max_center_shift)
+                    or self.max_center_shift <= 0.0):
+                raise ValueError('max_center_shift must be a positive '
+                                 'finite number or None')
+
         remove_kwargs = ['x', 'y', 'z', 'weights']
         self.fitter_kwargs = copy.deepcopy(fitter_kwargs)
         for kwarg in remove_kwargs:
             self.fitter_kwargs.pop(kwarg, None)
+
+        # The default TRFLSQFitter evaluation budget is often too small
+        # for crowded/noisy stellar cutouts, which can trigger repeated
+        # "maximum number of function evaluations" warnings.
+        if isinstance(self.fitter, TRFLSQFitter):
+            self.fitter_kwargs.setdefault('maxiter', 200)
+
+    def _allowed_center_shift(self, star):
+        if self.max_center_shift is not None:
+            return self.max_center_shift
+
+        if self.fit_boxsize is not None:
+            # Keep updates within the fit box support.
+            return max((min(self.fit_boxsize) - 1) / 2.0, 0.0)
+
+        # For full-cutout fits, allow at most a quarter of the smallest
+        # cutout dimension per iteration.
+        return max(min(star.shape) / 4.0, 0.0)
 
     @staticmethod
     def _get_star_fit_data(star, fit_boxsize):
@@ -602,6 +649,70 @@ class SpatialEPSFFitter:
         values[~np.isfinite(values)] = 0.0
         return np.clip(values, 0.0, None)
 
+    @staticmethod
+    def _iter_fitted_stars(stars):
+        for item in stars:
+            if isinstance(item, LinkedEPSFStar):
+                yield from item
+            else:
+                yield item
+
+    def _warn_fit_status_counts(self, fitted_stars):
+        n_overlap = 0
+        n_fit_error = 0
+        n_fitter_warning_stars = 0
+        fitter_warning_messages = []
+
+        for star in self._iter_fitted_stars(fitted_stars):
+            status = getattr(star, '_fit_error_status', 0)
+            if status == 1:
+                n_overlap += 1
+            elif status == 2:
+                n_fit_error += 1
+
+            fitter_warnings = getattr(star, '_fit_warning_messages', ())
+            if len(fitter_warnings) > 0:
+                n_fitter_warning_stars += 1
+            fitter_warning_messages.extend(fitter_warnings)
+
+        if n_overlap > 0:
+            warnings.warn(
+                f'{n_overlap} star(s) could not be fit because their '
+                'fitting regions extend beyond the star cutout image.',
+                AstropyUserWarning)
+
+        if n_fit_error > 0:
+            warnings.warn(
+                f'{n_fit_error} star(s) may not have been fit successfully '
+                'because the fitter did not converge or reached its maximum '
+                'number of iterations.',
+                AstropyUserWarning)
+
+        if len(fitter_warning_messages) > 0:
+            first_message = fitter_warning_messages[0]
+            warnings.warn(
+                f'{n_fitter_warning_stars} star(s) may not have been fit '
+                'successfully because the fitter emitted warning(s). '
+                f'First warning: {first_message}',
+                AstropyUserWarning)
+
+    @staticmethod
+    def _warnings_indicate_fit_failure(messages):
+        if len(messages) == 0:
+            return False
+
+        failure_tokens = (
+            'fit may be unsuccessful',
+            'maximum number of function evaluations is exceeded',
+            'maximum number of iterations',
+            'did not converge',
+        )
+        for message in messages:
+            text = str(message).lower()
+            if any(token in text for token in failure_tokens):
+                return True
+        return False
+
     def __call__(self, spatial_epsf, stars):
         if len(stars) == 0:
             return stars
@@ -640,7 +751,9 @@ class SpatialEPSFFitter:
         if pbar is not None:
             pbar.close()
 
-        return EPSFStars(fitted_stars)
+        fitted_stars = EPSFStars(fitted_stars)
+        self._warn_fit_status_counts(fitted_stars)
+        return fitted_stars
 
     def _fit_star(self, spatial_epsf, star, *, make_plot=True):
         star_work = copy.deepcopy(star)
@@ -662,10 +775,6 @@ class SpatialEPSFFitter:
                 data, weights, xx, yy = self._get_star_fit_data(
                     star_work, self.fit_boxsize)
             except (PartialOverlapError, NoOverlapError):
-                warnings.warn(f'The star at ({star.center[0]}, '
-                              f'{star.center[1]}) cannot be fit because '
-                              'its fitting region extends beyond the star '
-                              'cutout image.', AstropyUserWarning)
                 star_bad = copy.deepcopy(star)
                 star_bad._fit_error_status = 1
                 return star_bad
@@ -682,13 +791,22 @@ class SpatialEPSFFitter:
             local_epsf.x_0 = 0.0
             local_epsf.y_0 = 0.0
 
-            try:
-                fitted_epsf = self.fitter(model=local_epsf, x=xx, y=yy,
-                                          z=data, weights=fit_weights,
-                                          **self.fitter_kwargs)
-            except TypeError:
-                fitted_epsf = self.fitter(model=local_epsf, x=xx, y=yy,
-                                          z=data, **self.fitter_kwargs)
+            with warnings.catch_warnings(record=True) as fit_warnings:
+                warnings.simplefilter('always')
+                try:
+                    fitted_epsf = self.fitter(model=local_epsf, x=xx, y=yy,
+                                              z=data, weights=fit_weights,
+                                              **self.fitter_kwargs)
+                except TypeError:
+                    fitted_epsf = self.fitter(model=local_epsf, x=xx, y=yy,
+                                              z=data, **self.fitter_kwargs)
+            fit_warning_messages = [
+                str(warning.message) for warning in fit_warnings
+                if issubclass(warning.category, AstropyUserWarning)]
+            for warning in fit_warnings:
+                if not issubclass(warning.category, AstropyUserWarning):
+                    warnings.warn_explicit(warning.message, warning.category,
+                                           warning.filename, warning.lineno)
 
             fit_error_status = 0
             if self.fitter_has_fit_info:
@@ -698,11 +816,20 @@ class SpatialEPSFFitter:
             else:
                 fit_info = None
 
+            if self._warnings_indicate_fit_failure(fit_warning_messages):
+                fit_error_status = 2
+
             if fit_error_status == 2:
                 break
 
             x_shift = fitted_epsf.x_0.value
             y_shift = fitted_epsf.y_0.value
+            max_shift = self._allowed_center_shift(star_work)
+            shift_norm = np.hypot(x_shift, y_shift)
+            if (not np.isfinite(shift_norm)) or shift_norm > max_shift:
+                fit_error_status = 2
+                break
+
             x_center = star_work.cutout_center[0] + x_shift
             y_center = star_work.cutout_center[1] + y_shift
             star_work.cutout_center = (x_center, y_center)
@@ -717,10 +844,12 @@ class SpatialEPSFFitter:
 
         if fit_error_status != 2:
             star_work._fit_error_status = 0
+            star_work._fit_warning_messages = fit_warning_messages
             fitted_star = star_work
         else:
             fitted_star = copy.deepcopy(star)
             fitted_star._fit_error_status = fit_error_status
+            fitted_star._fit_warning_messages = fit_warning_messages
 
         if self.plot_fit_checks and make_plot and fit_error_status != 2:
             self._plot_fit_check(last_local_epsf, fitted_star)
@@ -785,11 +914,15 @@ class SpatialEPSFBuilder:
                  residual_smoothing_kernel='gaussian',
                  recenter_epsf=True,
                  normalise_epsf=True,
+                 enforce_nonnegative=False,
                  calibrate_ppe=('Flux', 'Position'),
                  constrain_stars=('Flux', 'Position'),
                  residual_star_rms_clip=None,
                  residual_outlier_clip=3.0,
                  residual_min_valid_samples=10,
+                 residual_update_fraction=0.8,
+                 adaptive_degree_by_cell_samples=False,
+                 residual_ridge_lambda=0.0,
                  interpolate_missing_coefficients=True,
                  coefficient_interpolation_method='cubic',
                  plot_diagnostics=False,
@@ -827,12 +960,22 @@ class SpatialEPSFBuilder:
         self.fitter.progress_bar = self.progress_bar
         self.recenter_epsf = bool(recenter_epsf)
         self.normalise_epsf = bool(normalise_epsf)
+        self.enforce_nonnegative = bool(enforce_nonnegative)
         self.center_accuracy_sq = float(center_accuracy)**2
-        self.residual_update_fraction = 0.8
+        self.residual_update_fraction = float(residual_update_fraction)
+        if not (0.0 < self.residual_update_fraction <= 1.0):
+            raise ValueError('residual_update_fraction must be in (0, 1]')
 
         self.residual_min_valid_samples = int(residual_min_valid_samples)
         if self.residual_min_valid_samples <= 0:
             raise ValueError('residual_min_valid_samples must be positive')
+
+        self.adaptive_degree_by_cell_samples = bool(
+            adaptive_degree_by_cell_samples)
+
+        self.residual_ridge_lambda = float(residual_ridge_lambda)
+        if self.residual_ridge_lambda < 0.0:
+            raise ValueError('residual_ridge_lambda must be >= 0')
 
         self.interpolate_missing_coefficients = bool(
             interpolate_missing_coefficients)
@@ -963,6 +1106,109 @@ class SpatialEPSFBuilder:
         if self.progress_bar:
             print(message, flush=True)
 
+    def _log_model_evaluation_diagnostics(self, model, stars, iter_num,
+                                          *, sample_size=300):
+        """
+        Log lightweight diagnostics of local model evaluation quality.
+
+        The diagnostics are computed on a sampled subset of stars and
+        include local-model normalization, negative-value fraction, and
+        normalized residual RMS.
+        """
+        good_stars = stars.all_good_stars
+        n_good = len(good_stars)
+        if n_good == 0:
+            self._log(f'SpatialEPSFBuilder: iteration {iter_num} model '
+                      'evaluation diagnostics: no good stars')
+            return
+
+        n_sample = min(int(sample_size), n_good)
+        if n_sample <= 0:
+            return
+
+        if n_sample == n_good:
+            sample_stars = good_stars
+        else:
+            idx = np.linspace(0, n_good - 1, n_sample).astype(int)
+            sample_stars = [good_stars[i] for i in idx]
+
+        norms = []
+        neg_fracs = []
+        residual_rms = []
+
+        for star in sample_stars:
+            kwargs = {}
+            if hasattr(self, '_model_flux'):
+                flux = self._model_flux(star, model)
+                if flux is not None:
+                    kwargs['flux'] = flux
+            if hasattr(self, '_effective_fwhm'):
+                fwhm = self._effective_fwhm(star, model)
+                if fwhm is not None:
+                    kwargs['fwhm'] = fwhm
+
+            local_epsf = model.make_image_psf(star.center[0], star.center[1],
+                                              **kwargs)
+            data = np.asanyarray(local_epsf.data, dtype=float)
+            finite = np.isfinite(data)
+            if not np.any(finite):
+                continue
+
+            norm = model._local_epsf_normalization(data)
+            norms.append(norm)
+            neg_fracs.append(np.count_nonzero(data[finite] < 0.0)
+                             / np.count_nonzero(finite))
+
+            residual = star.compute_residual_image(local_epsf)
+            residual = residual / max(star.flux, 1.0e-12)
+            if getattr(star, 'mask', None) is not None:
+                residual = residual[~np.asarray(star.mask)]
+            residual = residual[np.isfinite(residual)]
+            if residual.size > 0:
+                residual_rms.append(np.sqrt(np.nanmean(residual**2)))
+
+        if len(norms) == 0:
+            self._log(f'SpatialEPSFBuilder: iteration {iter_num} model '
+                      'evaluation diagnostics: no finite local ePSF data')
+            return
+
+        norms = np.asarray(norms, dtype=float)
+        neg_fracs = np.asarray(neg_fracs, dtype=float)
+        residual_rms = np.asarray(residual_rms, dtype=float)
+        rms_median = (np.nanmedian(residual_rms)
+                      if residual_rms.size > 0 else np.nan)
+        rms_p90 = (np.nanpercentile(residual_rms, 90)
+                   if residual_rms.size > 0 else np.nan)
+
+        self._log(
+            f'SpatialEPSFBuilder: iteration {iter_num} model evaluation '
+            f'(n={len(norms)}): norm median={np.nanmedian(norms):.4g}, '
+            f'norm p10/p90=({np.nanpercentile(norms, 10):.4g}, '
+            f'{np.nanpercentile(norms, 90):.4g}), '
+            f'negfrac median={np.nanmedian(neg_fracs):.4g}, '
+            f'resid_rms median={rms_median:.4g}, p90={rms_p90:.4g}')
+
+    @staticmethod
+    def _count_fit_statuses(stars):
+        """
+        Count fitted-star statuses.
+
+        Status 0 means fit succeeded, status 1 indicates overlap issues,
+        and status 2 indicates fitter failure/non-convergence.
+        """
+        n_ok = 0
+        n_overlap = 0
+        n_fit_error = 0
+        for star in stars.all_stars:
+            status = getattr(star, '_fit_error_status', 0)
+            if status == 1:
+                n_overlap += 1
+            elif status == 2:
+                n_fit_error += 1
+            else:
+                n_ok += 1
+        return n_ok, n_overlap, n_fit_error
+
     def _apply_linked_constraints(self, stars):
         """
         Constrain linked-star fluxes and/or centers using the mean values
@@ -1031,6 +1277,10 @@ class SpatialEPSFBuilder:
     def _n_basis(self):
         return len(SpatialEPSFModel._basis_labels_for_degree(self.degree))
 
+    @staticmethod
+    def _basis_count_for_degree(degree):
+        return len(SpatialEPSFModel._basis_labels_for_degree(int(degree)))
+
     def _create_initial_model(self, stars):
         if self.shape is not None:
             shape = as_pair('shape', self.shape, lower_bound=(0, 1),
@@ -1064,6 +1314,8 @@ class SpatialEPSFBuilder:
                                 detector_origin=self.detector_origin,
                                 detector_span=self.detector_span,
                                 normalize_local_epsf=self.normalise_epsf,
+                                enforce_nonnegative=getattr(
+                                    self, 'enforce_nonnegative', False),
                                 trust_map=None,
                                 epsf_class=self.epsf_class)
 
@@ -1126,10 +1378,22 @@ class SpatialEPSFBuilder:
         local_epsf = spatial_model.make_image_psf(star.center[0], star.center[1])
         residual_img = star.compute_residual_image(local_epsf)
         residual_img /= max(star.flux, 1.0e-12)
-        residual_img = residual_img[~star.mask].ravel()
+        residual_img = np.asanyarray(residual_img, dtype=float)
+        
+        # Keep only unmasked residual samples so values match the
+        # unmasked coordinate vectors (star._xidx_centered/_yidx_centered).
+        if getattr(star, 'mask', None) is not None:
+            residual_img = residual_img[~np.asarray(star.mask)].ravel()
+        else:
+            residual_img = residual_img.ravel()
 
-        x = spatial_model.oversampling[1] * star._xidx_centered
-        y = spatial_model.oversampling[0] * star._yidx_centered
+        # `star._xidx_centered` and `_yidx_centered` already contain the
+        # 1D coordinates of unmasked samples, so convert them directly
+        # to oversampled coordinates without re-masking with `mask2d`.
+        x = np.asanyarray(spatial_model.oversampling[1] *
+                          star._xidx_centered, dtype=float)
+        y = np.asanyarray(spatial_model.oversampling[0] *
+                          star._yidx_centered, dtype=float)
 
         epsf_xcenter = int((spatial_model.shape[1] - 1) / 2)
         epsf_ycenter = int((spatial_model.shape[0] - 1) / 2)
@@ -1211,10 +1475,17 @@ class SpatialEPSFBuilder:
         Exclude whole stars from the residual stack using a robust RMS
         clip against the current spatial ePSF model.
         """
-        if self.residual_star_rms_clip is None:
-            return copy.deepcopy(stars)
-
         selected = copy.deepcopy(stars)
+
+        # Do not use stars with failed fits to build residual updates in
+        # this iteration; they can still be refit in later iterations.
+        for star in selected.all_stars:
+            if getattr(star, '_fit_error_status', 0) > 0:
+                star._excluded_from_fit = True
+
+        if self.residual_star_rms_clip is None:
+            return selected
+
         good_stars = selected.all_good_stars
         if len(good_stars) == 0:
             return selected
@@ -1248,7 +1519,7 @@ class SpatialEPSFBuilder:
                 star._excluded_from_fit = True
 
         if selected.n_good_stars == 0:
-            return copy.deepcopy(stars)
+            return selected
         return selected
 
     @staticmethod
@@ -1269,13 +1540,15 @@ class SpatialEPSFBuilder:
         max_core = np.maximum(max_core, 3)
         return np.minimum(core, max_core)
 
-    def _interpolate_missing_coefficient_images(self, coeff_data):
-        if not self.interpolate_missing_coefficients:
+    def _interpolate_missing_coefficient_images(self, coeff_data, *,
+                                                context='coefficient'):
+        if not getattr(self, 'interpolate_missing_coefficients', True):
             coeff_data = np.array(coeff_data, copy=True, dtype=float)
             coeff_data[~np.isfinite(coeff_data)] = 0.0
             return coeff_data
 
         coeff_data = np.array(coeff_data, copy=True, dtype=float)
+        not_interpolated_count = 0
         for idx in range(coeff_data.shape[0]):
             image = coeff_data[idx]
             mask = ~np.isfinite(image)
@@ -1284,27 +1557,47 @@ class SpatialEPSFBuilder:
 
             if np.all(mask):
                 image[:] = 0.0
+                not_interpolated_count += np.count_nonzero(mask)
                 continue
 
-            method = self.coefficient_interpolation_method
+            method = getattr(self, 'coefficient_interpolation_method',
+                             'cubic')
             if method == 'cubic' and np.count_nonzero(~mask) < 3:
                 method = 'nearest'
 
             try:
                 image = _interpolate_missing_data(image, mask=mask,
                                                   method=method)
-            except (ValueError, RuntimeError, QhullError):
-                image = _interpolate_missing_data(coeff_data[idx], mask=mask,
-                                                  method='nearest')
+            except Exception:
+                # If interpolation fails for this image, set missing
+                # values to zero so the rest of the pipeline can run.
+                image[mask] = 0.0
 
-            remaining = ~np.isfinite(image)
-            if np.any(remaining):
-                image = _interpolate_missing_data(image, mask=remaining,
-                                                  method='nearest')
             coeff_data[idx] = image
+        if not_interpolated_count > 0:
+            warnings.warn(
+                f'Interpolation is not possible for '
+                f'{not_interpolated_count} missing {context} value(s) '
+                'because there are no fitted values to interpolate from; '
+                'setting them to 0.',
+                AstropyUserWarning)
 
         coeff_data[~np.isfinite(coeff_data)] = 0.0
         return coeff_data
+
+    def _warn_insufficient_coefficient_samples(self, missing_mask,
+                                               min_valid_samples, context):
+        missing_count = np.count_nonzero(missing_mask)
+        if missing_count == 0:
+            return
+
+        total_count = np.size(missing_mask)
+        warnings.warn(
+            f'Insufficient sources in {missing_count} of {total_count} '
+            f'{context} grid section(s); at least {min_valid_samples} '
+            'valid samples are required in each section. Missing '
+            'coefficient values will be interpolated or set to 0.',
+            AstropyUserWarning)
 
     def _underconstrained_residual_mask(self, residuals, x_coords=None,
                                         y_coords=None):
@@ -1343,6 +1636,13 @@ class SpatialEPSFBuilder:
                                      det_x, det_y)
         _, ny, nx = residuals.shape
         coeff_update = np.full((nbasis, ny, nx), np.nan, dtype=float)
+        fit_sample_count = np.zeros((ny, nx), dtype=int)
+        max_abs_coeff = -np.inf
+        max_abs_coeff_cell = None
+        max_abs_coeff_nfit = 0
+        n_adaptive_reduced = 0
+        skipped_underdetermined = 0
+        skipped_rank_deficient = 0
         use_offsets = x_coords is not None and y_coords is not None
         xcenter = nx // 2
         ycenter = ny // 2
@@ -1380,13 +1680,135 @@ class SpatialEPSFBuilder:
                 else:
                     z_fit = z_valid
 
-                if z_fit.size < self.residual_min_valid_samples:
+                n_offset_terms = design.shape[1] - nbasis
+                active_degree = self.degree
+                if getattr(self, 'adaptive_degree_by_cell_samples', False):
+                    for trial_degree in range(self.degree, -1, -1):
+                        trial_basis_count = self._basis_count_for_degree(
+                            trial_degree)
+                        n_model_params = trial_basis_count + n_offset_terms
+                        min_required = max(self.residual_min_valid_samples,
+                                           n_model_params)
+                        if z_fit.size >= min_required:
+                            active_degree = trial_degree
+                            break
+
+                active_basis_count = self._basis_count_for_degree(
+                    active_degree)
+                n_model_params = active_basis_count + n_offset_terms
+                min_required = max(self.residual_min_valid_samples,
+                                   n_model_params)
+                if z_fit.size < min_required:
+                    skipped_underdetermined += 1
                     continue
 
-                coeffs, _, _, _ = np.linalg.lstsq(design, z_fit, rcond=None)
-                coeff_update[:, iy, ix] = coeffs[:nbasis]
+                if active_degree < self.degree:
+                    n_adaptive_reduced += 1
 
-        return self._interpolate_missing_coefficient_images(coeff_update)
+                design_fit = np.column_stack(
+                    (design[:, :active_basis_count],
+                     design[:, nbasis:]))
+
+                coeffs, _, rank, _ = np.linalg.lstsq(design_fit, z_fit,
+                                                     rcond=None)
+                residual_ridge_lambda = getattr(self, 'residual_ridge_lambda',
+                                                0.0)
+                if residual_ridge_lambda > 0.0:
+                    eye = np.eye(n_model_params, dtype=float)
+                    ridge_matrix = (design_fit.T @ design_fit
+                                    + residual_ridge_lambda * eye)
+                    rhs = design_fit.T @ z_fit
+                    coeffs = np.linalg.solve(ridge_matrix, rhs)
+                    rank = n_model_params
+                if rank < n_model_params:
+                    skipped_rank_deficient += 1
+                    continue
+
+                coeff_update[:, iy, ix] = 0.0
+                coeff_update[:active_basis_count, iy, ix] = (
+                    coeffs[:active_basis_count])
+                fit_sample_count[iy, ix] = z_fit.size
+
+                cell_max_abs = np.max(np.abs(coeffs[:active_basis_count]))
+                if cell_max_abs > max_abs_coeff:
+                    max_abs_coeff = cell_max_abs
+                    max_abs_coeff_cell = (iy, ix)
+                    max_abs_coeff_nfit = z_fit.size
+
+        missing_mask = np.any(~np.isfinite(coeff_update), axis=0)
+        n_missing = np.sum(missing_mask)
+        self._warn_insufficient_coefficient_samples(
+            missing_mask, self.residual_min_valid_samples,
+            'position residual coefficient')
+        
+        # Debug: log stats before interpolation
+        valid_before_interp = coeff_update[:, ~missing_mask]
+        if valid_before_interp.size > 0:
+            coeff_abs = np.abs(valid_before_interp)
+            coeff_p99 = np.percentile(coeff_abs, 99)
+            coeff_p999 = np.percentile(coeff_abs, 99.9)
+            n_abs_gt_10 = np.count_nonzero(coeff_abs > 10.0)
+            n_abs_gt_100 = np.count_nonzero(coeff_abs > 100.0)
+            n_abs_gt_1000 = np.count_nonzero(coeff_abs > 1000.0)
+            self._log(
+                'DEBUG residual coeff before interp: '
+                f'min={np.min(valid_before_interp):.6f}, '
+                f'max={np.max(valid_before_interp):.6f}, '
+                f'median={np.median(valid_before_interp):.6f}, '
+                f'|c| p99={coeff_p99:.6f}, |c| p99.9={coeff_p999:.6f}, '
+                f'|c|>10: {n_abs_gt_10}, '
+                f'|c|>100: {n_abs_gt_100}, '
+                f'|c|>1000: {n_abs_gt_1000}')
+
+        valid_cell_counts = fit_sample_count[fit_sample_count > 0]
+        if valid_cell_counts.size > 0:
+            self._log(
+                'DEBUG residual coeff fit sample counts: '
+                f'min={np.min(valid_cell_counts)}, '
+                f'median={np.median(valid_cell_counts):.1f}, '
+                f'p10={np.percentile(valid_cell_counts, 10):.1f}, '
+                f'p90={np.percentile(valid_cell_counts, 90):.1f}, '
+                f'max={np.max(valid_cell_counts)}')
+        self._log(
+            'DEBUG residual coeff skipped solves: '
+            f'underdetermined={skipped_underdetermined}, '
+            f'rank_deficient={skipped_rank_deficient}, '
+            f'adaptive_degree_reduced={n_adaptive_reduced}')
+        if max_abs_coeff_cell is not None:
+            iy, ix = max_abs_coeff_cell
+            self._log(
+                'DEBUG residual coeff worst grid cell: '
+                f'iy={iy}, ix={ix}, '
+                f'max_abs_coeff={max_abs_coeff:.6f}, '
+                f'n_fit_samples={max_abs_coeff_nfit}')
+        
+        coeff_update = self._interpolate_missing_coefficient_images(
+            coeff_update, context='position residual coefficient')
+
+        # Debug: log stats after interpolation
+        valid_after_interp = coeff_update[:, ~missing_mask]
+        if valid_after_interp.size > 0:
+            coeff_abs = np.abs(valid_after_interp)
+            self._log(
+                'DEBUG residual coeff after interp: '
+                f'min={np.min(valid_after_interp):.6f}, '
+                f'max={np.max(valid_after_interp):.6f}, '
+                f'median={np.median(valid_after_interp):.6f}, '
+                f'|c| p99={np.percentile(coeff_abs, 99):.6f}, '
+                f'|c| p99.9={np.percentile(coeff_abs, 99.9):.6f}')
+
+        # Do not update underconstrained grid points. Interpolation can be
+        # useful for diagnostics/visualization, but applying extrapolated
+        # residual updates in poorly sampled regions can destabilize later
+        # fitting iterations.
+        coeff_update[:, missing_mask] = 0.0
+        
+        # Debug: verify zeroing happened
+        zeroed_cells = coeff_update[:, missing_mask]
+        if zeroed_cells.size > 0:
+            self._log(f'DEBUG after zeroing underconstrained cells: zeroed_min={np.min(zeroed_cells):.6f}, zeroed_max={np.max(zeroed_cells):.6f}, n_zeroed={n_missing}')
+        
+        return coeff_update
 
     def _residual_offset_terms(self, dx, dy, ix, iy, nx, ny):
         """
@@ -1503,6 +1925,7 @@ class SpatialEPSFBuilder:
             detector_origin=self.detector_origin,
             detector_span=self.detector_span,
             normalize_local_epsf=self.normalise_epsf,
+            enforce_nonnegative=getattr(self, 'enforce_nonnegative', False),
             epsf_class=self.epsf_class)
         local_epsf = spatial_model.make_image_psf(xref, yref)
         epsf_data = np.array(local_epsf.data, copy=True)
@@ -1580,6 +2003,8 @@ class SpatialEPSFBuilder:
                                  detector_origin=self.detector_origin,
                                  detector_span=self.detector_span,
                                  normalize_local_epsf=False,
+                                 enforce_nonnegative=getattr(
+                                     self, 'enforce_nonnegative', False),
                                  epsf_class=self.epsf_class)
         local_data = model.local_epsf_data(xref, yref)
         scale = model._local_epsf_normalization(local_data)
@@ -2492,6 +2917,7 @@ class SpatialEPSFBuilder:
         plt.show()
 
     def build_epsf(self, stars, *, init_model=None):
+        
         if not isinstance(stars, EPSFStars):
             raise TypeError('stars must be an EPSFStars object')
 
@@ -2514,8 +2940,16 @@ class SpatialEPSFBuilder:
                       'starting')
             spatial_model = copy.deepcopy(spatial_model)
 
+            self._log_model_evaluation_diagnostics(spatial_model, stars,
+                                                   iter_num)
+
             self._log(f'SpatialEPSFBuilder: iteration {iter_num} fitting stars')
             fitted_stars_raw = self.fitter(spatial_model, stars)
+            n_ok, n_overlap, n_fit_error = self._count_fit_statuses(
+                fitted_stars_raw)
+            self._log(f'SpatialEPSFBuilder: iteration {iter_num} fit status '
+                      f'ok={n_ok}, overlap={n_overlap}, '
+                      f'fit_error={n_fit_error}')
 
             self._log(f'SpatialEPSFBuilder: iteration {iter_num} fitting '
                       'spatial PPE correction surfaces')
@@ -2543,6 +2977,15 @@ class SpatialEPSFBuilder:
             residuals, weights, x_coords, y_coords, det_x, det_y, group_id = (
                 self._resample_residuals(residual_stars, spatial_model))
 
+            # Debug: log residual stack statistics
+            valid_residuals = residuals[np.isfinite(residuals)]
+            if valid_residuals.size > 0:
+                res_min = np.min(valid_residuals)
+                res_max = np.max(valid_residuals)
+                res_median = np.median(valid_residuals)
+                neg_frac = np.sum(valid_residuals < 0) / valid_residuals.size
+                self._log(f'DEBUG iteration {iter_num} residual stack: min={res_min:.6f}, max={res_max:.6f}, median={res_median:.6f}, neg_frac={neg_frac:.6f}')
+
             self._log(f'SpatialEPSFBuilder: iteration {iter_num} '
                       'computing trust map from residual RMS')
             trust_map = self._compute_trust_map_from_residuals(
@@ -2554,6 +2997,8 @@ class SpatialEPSFBuilder:
                       'spatial residual coefficient surfaces')
             coeff_update = self._fit_residual_coefficients(
                 residuals, det_x, det_y, x_coords=x_coords, y_coords=y_coords)
+            underconstrained_mask = self._underconstrained_residual_mask(
+                residuals, x_coords=x_coords, y_coords=y_coords)
 
             if self._residual_smooth_kernel is not None:
                 self._log(f'SpatialEPSFBuilder: iteration {iter_num} smoothing '
@@ -2561,6 +3006,10 @@ class SpatialEPSFBuilder:
                 for ibasis in range(coeff_update.shape[0]):
                     coeff_update[ibasis] = convolve(coeff_update[ibasis],
                                                     self._residual_smooth_kernel)
+
+            # Keep underconstrained sections fixed at zero even when
+            # smoothing is enabled.
+            coeff_update[:, underconstrained_mask] = 0.0
 
             if iter_num % 10 == 0 or iter_num == self.maxiters:
                 self._log(f'SpatialEPSFBuilder: iteration {iter_num} plotting '
@@ -2608,6 +3057,8 @@ class SpatialEPSFBuilder:
                 detector_origin=self.detector_origin,
                 detector_span=self.detector_span,
                 normalize_local_epsf=self.normalise_epsf,
+                enforce_nonnegative=getattr(
+                    self, 'enforce_nonnegative', False),
                 trust_map=trust_map,
                 epsf_class=self.epsf_class)
 
