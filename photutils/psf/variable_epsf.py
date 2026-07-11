@@ -83,12 +83,13 @@ class VariableEPSFModel(SpatialEPSFModel):
         The ``'additive'`` mode applies ``data + correction``.
 
     flux_coeff_data : 3D `~numpy.ndarray`, optional
-        Flux coefficient array with shape ``(flux_degree, ny, nx)``.
+        Flux coefficient array with shape ``(max(1, flux_degree), ny, nx)``.
 
     flux_degree : int, optional
-        Polynomial degree used for the flux basis. Supported values are 1
-        and 2. The basis excludes a constant term, so the number of
-        basis terms is ``flux_degree``.
+        Polynomial degree used for the flux basis. Supported values are 0,
+        1, and 2. Degree 0 applies a constant correction over the flux
+        range. For higher degrees, the basis excludes a constant term, so
+        the number of basis terms is ``flux_degree``.
 
     flux_reference, flux_scale : float, optional
         Parameters used to normalize flux values via
@@ -108,6 +109,12 @@ class VariableEPSFModel(SpatialEPSFModel):
     fwhm_reference, fwhm_scale : float, optional
         Parameters used to normalize FWHM values via
         ``(fwhm - fwhm_reference) / fwhm_scale``.
+
+    local_norm_box : int or tuple of int, optional
+        The native-pixel ``(ny, nx)`` box size used when computing the
+        local ePSF normalization factor. If `None`, then the box size is
+        inferred from ``data.shape / oversampling`` (the historical
+        behavior).
     """
 
     def __init__(self, spatial_coeff_data=None, *, oversampling,
@@ -115,6 +122,7 @@ class VariableEPSFModel(SpatialEPSFModel):
                  degree=1, origin=None, fill_value=0.0,
                  detector_origin=None, detector_span=None,
                  normalize_local_epsf=True, trust_map=None,
+                 local_norm_box=None,
                  epsf_class=ImagePSF, dependencies=('Position',),
                  clip_negative=False,
                  flux_correction_mode='multiplicative',
@@ -145,6 +153,7 @@ class VariableEPSFModel(SpatialEPSFModel):
             origin=origin, fill_value=fill_value,
             detector_origin=detector_origin, detector_span=detector_span,
             normalize_local_epsf=normalize_local_epsf, trust_map=trust_map,
+            local_norm_box=local_norm_box,
             epsf_class=epsf_class)
 
         self.dependencies = dependencies
@@ -154,8 +163,8 @@ class VariableEPSFModel(SpatialEPSFModel):
         self.fwhm_correction_mode = _parse_correction_mode(
             fwhm_correction_mode, 'fwhm_correction_mode')
         self.flux_degree = int(flux_degree)
-        if self.flux_degree not in (1, 2):
-            raise ValueError('flux_degree must be 1 or 2')
+        if self.flux_degree not in (0, 1, 2):
+            raise ValueError('flux_degree must be 0, 1, or 2')
 
         self.flux_reference = float(flux_reference)
         self.flux_scale = float(flux_scale)
@@ -166,7 +175,7 @@ class VariableEPSFModel(SpatialEPSFModel):
                              'must be finite and > 0')
 
         if 'Flux' in dependencies:
-            expected_shape = (self.flux_degree, *self.shape)
+            expected_shape = (max(1, self.flux_degree), *self.shape)
             if flux_coeff_data is None:
                 flux_coeff_data = np.zeros(expected_shape, dtype=float)
             else:
@@ -232,6 +241,9 @@ class VariableEPSFModel(SpatialEPSFModel):
 
     def flux_basis_vector(self, flux):
         flux_norm = self._normalize_flux(flux)
+        if self.flux_degree == 0:
+            return np.stack([np.ones_like(flux_norm, dtype=float)], axis=0)
+
         basis = []
         for power in range(1, self.flux_degree + 1):
             basis.append(flux_norm**power)
@@ -314,6 +326,7 @@ class VariableEPSFFitter(SpatialEPSFFitter):
     def __init__(self, *, fitter=None, fit_boxsize=3, progress_bar=False,
                  plot_fit_checks=False, model_weight_map=None,
                  model_weight_maxiters=1, model_weight_center_tol=1.0e-3,
+                 max_center_shift=None,
                  use_time_integrated_flux=True, **fitter_kwargs):
         if fitter is None:
             fitter = TRFLSQFitter()
@@ -323,6 +336,7 @@ class VariableEPSFFitter(SpatialEPSFFitter):
                          model_weight_map=model_weight_map,
                          model_weight_maxiters=model_weight_maxiters,
                          model_weight_center_tol=model_weight_center_tol,
+                         max_center_shift=max_center_shift,
                          **fitter_kwargs)
         self.use_time_integrated_flux = bool(use_time_integrated_flux)
         self._warned_missing_exptime = False
@@ -427,7 +441,9 @@ class VariableEPSFFitter(SpatialEPSFFitter):
         if pbar is not None:
             pbar.close()
 
-        return EPSFStars(fitted_stars)
+        fitted_stars = EPSFStars(fitted_stars)
+        self._warn_fit_status_counts(fitted_stars)
+        return fitted_stars
 
     def _fit_star(self, spatial_epsf, star, *, make_plot=True):
         star_work = copy.deepcopy(star)
@@ -451,10 +467,6 @@ class VariableEPSFFitter(SpatialEPSFFitter):
                 data, weights, xx, yy = self._get_star_fit_data(
                     star_work, self.fit_boxsize)
             except (PartialOverlapError, NoOverlapError):
-                warnings.warn(f'The star at ({star.center[0]}, '
-                              f'{star.center[1]}) cannot be fit because '
-                              'its fitting region extends beyond the star '
-                              'cutout image.', AstropyUserWarning)
                 star_bad = copy.deepcopy(star)
                 star_bad._fit_error_status = 1
                 return star_bad
@@ -471,13 +483,22 @@ class VariableEPSFFitter(SpatialEPSFFitter):
             local_epsf.x_0 = 0.0
             local_epsf.y_0 = 0.0
 
-            try:
-                fitted_epsf = self.fitter(model=local_epsf, x=xx, y=yy,
-                                          z=data, weights=fit_weights,
-                                          **self.fitter_kwargs)
-            except TypeError:
-                fitted_epsf = self.fitter(model=local_epsf, x=xx, y=yy,
-                                          z=data, **self.fitter_kwargs)
+            with warnings.catch_warnings(record=True) as fit_warnings:
+                warnings.simplefilter('always')
+                try:
+                    fitted_epsf = self.fitter(model=local_epsf, x=xx, y=yy,
+                                              z=data, weights=fit_weights,
+                                              **self.fitter_kwargs)
+                except TypeError:
+                    fitted_epsf = self.fitter(model=local_epsf, x=xx, y=yy,
+                                              z=data, **self.fitter_kwargs)
+            fit_warning_messages = [
+                str(warning.message) for warning in fit_warnings
+                if issubclass(warning.category, AstropyUserWarning)]
+            for warning in fit_warnings:
+                if not issubclass(warning.category, AstropyUserWarning):
+                    warnings.warn_explicit(warning.message, warning.category,
+                                           warning.filename, warning.lineno)
 
             fit_error_status = 0
             if self.fitter_has_fit_info:
@@ -487,11 +508,20 @@ class VariableEPSFFitter(SpatialEPSFFitter):
             else:
                 fit_info = None
 
+            if self._warnings_indicate_fit_failure(fit_warning_messages):
+                fit_error_status = 2
+
             if fit_error_status == 2:
                 break
 
             x_shift = fitted_epsf.x_0.value
             y_shift = fitted_epsf.y_0.value
+            max_shift = self._allowed_center_shift(star_work)
+            shift_norm = np.hypot(x_shift, y_shift)
+            if (not np.isfinite(shift_norm)) or shift_norm > max_shift:
+                fit_error_status = 2
+                break
+
             x_center = star_work.cutout_center[0] + x_shift
             y_center = star_work.cutout_center[1] + y_shift
             star_work.cutout_center = (x_center, y_center)
@@ -506,10 +536,12 @@ class VariableEPSFFitter(SpatialEPSFFitter):
 
         if fit_error_status != 2:
             star_work._fit_error_status = 0
+            star_work._fit_warning_messages = fit_warning_messages
             fitted_star = star_work
         else:
             fitted_star = copy.deepcopy(star)
             fitted_star._fit_error_status = fit_error_status
+            fitted_star._fit_warning_messages = fit_warning_messages
 
         if self.plot_fit_checks and make_plot and fit_error_status != 2:
             self._plot_fit_check(last_local_epsf, fitted_star)
@@ -526,24 +558,44 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
     -----
     This is an experimental prototype that layers configurable flux- and
     FWHM-dependent corrections onto the spatial model.
+
+    Parameters
+    ----------
+    dependencies : iterable of {'Position', 'Flux', 'FWHM'}, optional
+        Model dependencies to enable. When ``init_model`` is supplied to
+        `build_epsf`, dependencies already present on that model are
+        preserved and any additional dependencies requested here are added.
+
+    fit_dependencies : iterable of {'Position', 'Flux', 'FWHM'}, optional
+        Enabled dependencies to fit/update. The default is to fit all
+        entries in ``dependencies``. Use this to add a new dependency term
+        to an existing model while keeping other terms fixed.
     """
 
-    def __init__(self, *, dependencies=('Position',), flux_degree=1,
-                 flux_min_valid_samples=25,
+    def __init__(self, *, dependencies=('Position',), fit_dependencies=None,
+                 flux_degree=1, flux_min_valid_samples=25,
                  fwhm_degree=1, fwhm_min_valid_samples=25,
                  flux_correction_mode='multiplicative',
                  fwhm_correction_mode='multiplicative',
                  use_time_integrated_flux=True, clip_negative=True,
                  fitter=None, **kwargs):
         self.dependencies = _parse_dependencies(dependencies)
+        if fit_dependencies is None:
+            fit_dependencies = self.dependencies
+        self.fit_dependencies = _parse_dependencies(fit_dependencies)
+        invalid = [item for item in self.fit_dependencies
+                   if item not in self.dependencies]
+        if invalid:
+            raise ValueError('fit_dependencies entries must also be present '
+                             'in dependencies')
         self.clip_negative = bool(clip_negative)
         self.flux_correction_mode = _parse_correction_mode(
             flux_correction_mode, 'flux_correction_mode')
         self.fwhm_correction_mode = _parse_correction_mode(
             fwhm_correction_mode, 'fwhm_correction_mode')
         self.flux_degree = int(flux_degree)
-        if self.flux_degree not in (1, 2):
-            raise ValueError('flux_degree must be 1 or 2')
+        if self.flux_degree not in (0, 1, 2):
+            raise ValueError('flux_degree must be 0, 1, or 2')
 
         self.fwhm_degree = int(fwhm_degree)
         if self.fwhm_degree not in (1, 2):
@@ -583,7 +635,17 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
             model_weight_map=self.fitter.model_weight_map,
             model_weight_maxiters=self.fitter.model_weight_maxiters,
             model_weight_center_tol=self.fitter.model_weight_center_tol,
+            max_center_shift=self.fitter.max_center_shift,
             use_time_integrated_flux=self.use_time_integrated_flux)
+
+    @staticmethod
+    def _merge_dependencies(*dependency_sets):
+        dependencies = []
+        for dependency_set in dependency_sets:
+            for dependency in dependency_set:
+                if dependency not in dependencies:
+                    dependencies.append(dependency)
+        return tuple(dependencies)
 
     def _effective_flux(self, star):
         flux = float(star.flux)
@@ -746,17 +808,23 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                                                         dx=dx, dy=dy)
         return result
 
-    def _fit_flux_coefficients(self, residuals, weights, effective_flux):
+    def _fit_flux_coefficients(self, residuals, weights, effective_flux,
+                               flux_degree=None):
         _, ny, nx = residuals.shape
-        n_basis = self.flux_degree
+        if flux_degree is None:
+            flux_degree = self.flux_degree
+        n_basis = max(1, flux_degree)
         coeff = np.full((n_basis, ny, nx), np.nan, dtype=float)
 
         flux_norm, reference, scale = self._normalize_flux_samples(
             effective_flux)
         valid_flux = np.isfinite(flux_norm)
 
-        design_full = np.column_stack(
-            [flux_norm**power for power in range(1, self.flux_degree + 1)])
+        if flux_degree == 0:
+            design_full = np.ones((flux_norm.size, 1), dtype=float)
+        else:
+            design_full = np.column_stack(
+                [flux_norm**power for power in range(1, flux_degree + 1)])
 
         for iy in range(ny):
             for ix in range(nx):
@@ -787,16 +855,43 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 coeffs, _, _, _ = np.linalg.lstsq(design_w, z_w, rcond=None)
                 coeff[:, iy, ix] = coeffs
 
-        coeff = self._interpolate_missing_coefficient_images(coeff)
+        missing_mask = np.any(~np.isfinite(coeff), axis=0)
+        n_missing = np.sum(missing_mask)
+        self._warn_insufficient_coefficient_samples(
+            missing_mask, self.flux_min_valid_samples, 'flux coefficient')
+        
+        # Debug: log stats before interpolation
+        valid_before_interp = coeff[:, ~missing_mask]
+        if valid_before_interp.size > 0:
+            self._log(f'DEBUG flux coeff before interp: min={np.min(valid_before_interp):.6f}, max={np.max(valid_before_interp):.6f}, median={np.median(valid_before_interp):.6f}')
+        
+        coeff = self._interpolate_missing_coefficient_images(
+            coeff, context='flux coefficient')
+        
+        # Debug: log stats after interpolation
+        valid_after_interp = coeff[:, ~missing_mask]
+        if valid_after_interp.size > 0:
+            self._log(f'DEBUG flux coeff after interp: min={np.min(valid_after_interp):.6f}, max={np.max(valid_after_interp):.6f}, median={np.median(valid_after_interp):.6f}')
+        
+        coeff[:, missing_mask] = 0.0
+        
+        # Debug: verify zeroing happened
+        zeroed_cells = coeff[:, missing_mask]
+        if zeroed_cells.size > 0:
+            self._log(f'DEBUG flux after zeroing: zeroed_min={np.min(zeroed_cells):.6f}, zeroed_max={np.max(zeroed_cells):.6f}, n_zeroed={n_missing}')
+        
         return coeff, reference, scale
 
     @staticmethod
     def _normalize_fwhm_samples(fwhms):
         return VariableEPSFBuilder._normalize_samples(fwhms)
 
-    def _fit_fwhm_coefficients(self, residuals, weights, effective_fwhm):
+    def _fit_fwhm_coefficients(self, residuals, weights, effective_fwhm,
+                               fwhm_degree=None):
         _, ny, nx = residuals.shape
-        n_basis = self.fwhm_degree
+        if fwhm_degree is None:
+            fwhm_degree = self.fwhm_degree
+        n_basis = fwhm_degree
         coeff = np.full((n_basis, ny, nx), np.nan, dtype=float)
 
         fwhm_norm, reference, scale = self._normalize_fwhm_samples(
@@ -804,7 +899,7 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
         valid_fwhm = np.isfinite(fwhm_norm)
 
         design_full = np.column_stack(
-            [fwhm_norm**power for power in range(1, self.fwhm_degree + 1)])
+            [fwhm_norm**power for power in range(1, fwhm_degree + 1)])
 
         for iy in range(ny):
             for ix in range(nx):
@@ -835,7 +930,31 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 coeffs, _, _, _ = np.linalg.lstsq(design_w, z_w, rcond=None)
                 coeff[:, iy, ix] = coeffs
 
-        coeff = self._interpolate_missing_coefficient_images(coeff)
+        missing_mask = np.any(~np.isfinite(coeff), axis=0)
+        n_missing = np.sum(missing_mask)
+        self._warn_insufficient_coefficient_samples(
+            missing_mask, self.fwhm_min_valid_samples, 'FWHM coefficient')
+        
+        # Debug: log stats before interpolation
+        valid_before_interp = coeff[:, ~missing_mask]
+        if valid_before_interp.size > 0:
+            self._log(f'DEBUG fwhm coeff before interp: min={np.min(valid_before_interp):.6f}, max={np.max(valid_before_interp):.6f}, median={np.median(valid_before_interp):.6f}')
+        
+        coeff = self._interpolate_missing_coefficient_images(
+            coeff, context='FWHM coefficient')
+        
+        # Debug: log stats after interpolation
+        valid_after_interp = coeff[:, ~missing_mask]
+        if valid_after_interp.size > 0:
+            self._log(f'DEBUG fwhm coeff after interp: min={np.min(valid_after_interp):.6f}, max={np.max(valid_after_interp):.6f}, median={np.median(valid_after_interp):.6f}')
+        
+        coeff[:, missing_mask] = 0.0
+        
+        # Debug: verify zeroing happened
+        zeroed_cells = coeff[:, missing_mask]
+        if zeroed_cells.size > 0:
+            self._log(f'DEBUG fwhm after zeroing: zeroed_min={np.min(zeroed_cells):.6f}, zeroed_max={np.max(zeroed_cells):.6f}, n_zeroed={n_missing}')
+        
         return coeff, reference, scale
 
     def _resample_residual(self, star, spatial_model):
@@ -845,10 +964,19 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
             fwhm=self._effective_fwhm(star, spatial_model))
         residual_img = star.compute_residual_image(local_epsf)
         residual_img /= max(star.flux, 1.0e-12)
-        residual_img = residual_img[~star.mask].ravel()
+        residual_img = np.asanyarray(residual_img, dtype=float)
 
-        x = spatial_model.oversampling[1] * star._xidx_centered
-        y = spatial_model.oversampling[0] * star._yidx_centered
+        # Keep only unmasked residual samples so values match the
+        # unmasked coordinate vectors (star._xidx_centered/_yidx_centered).
+        if getattr(star, 'mask', None) is not None:
+            residual_img = residual_img[~np.asarray(star.mask)].ravel()
+        else:
+            residual_img = residual_img.ravel()
+
+        x = np.asanyarray(spatial_model.oversampling[1] *
+                          star._xidx_centered, dtype=float)
+        y = np.asanyarray(spatial_model.oversampling[0] *
+                          star._yidx_centered, dtype=float)
 
         epsf_xcenter = int((spatial_model.shape[1] - 1) / 2)
         epsf_ycenter = int((spatial_model.shape[0] - 1) / 2)
@@ -884,10 +1012,17 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
         return resampled_img, img_weights, x_coords_img, y_coords_img
 
     def _select_residual_stars(self, stars, spatial_model):
-        if self.residual_star_rms_clip is None:
-            return copy.deepcopy(stars)
-
         selected = copy.deepcopy(stars)
+
+        # Do not use stars with failed fits to build residual updates in
+        # this iteration; they can still be refit in later iterations.
+        for star in selected.all_stars:
+            if getattr(star, '_fit_error_status', 0) > 0:
+                star._excluded_from_fit = True
+
+        if self.residual_star_rms_clip is None:
+            return selected
+
         good_stars = selected.all_good_stars
         if len(good_stars) == 0:
             return selected
@@ -923,13 +1058,59 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 star._excluded_from_fit = True
 
         if selected.n_good_stars == 0:
-            return copy.deepcopy(stars)
+            return selected
         return selected
 
     def _create_initial_variable_model(self, stars, *, init_model=None):
         if init_model is not None:
             if isinstance(init_model, VariableEPSFModel):
-                return init_model.deepcopy()
+                dependencies = self._merge_dependencies(init_model.dependencies,
+                                                        self.dependencies)
+
+                flux_coeff_data = None
+                flux_degree = self.flux_degree
+                flux_reference = self._flux_reference
+                flux_scale = self._flux_scale
+                if 'Flux' in init_model.dependencies:
+                    flux_coeff_data = init_model.flux_coeff_data
+                    flux_degree = init_model.flux_degree
+                    flux_reference = init_model.flux_reference
+                    flux_scale = init_model.flux_scale
+
+                fwhm_coeff_data = None
+                fwhm_degree = self.fwhm_degree
+                fwhm_reference = self._fwhm_reference
+                fwhm_scale = self._fwhm_scale
+                if 'FWHM' in init_model.dependencies:
+                    fwhm_coeff_data = init_model.fwhm_coeff_data
+                    fwhm_degree = init_model.fwhm_degree
+                    fwhm_reference = init_model.fwhm_reference
+                    fwhm_scale = init_model.fwhm_scale
+
+                return VariableEPSFModel(
+                    spatial_coeff_data=init_model.spatial_coeff_data,
+                    oversampling=init_model.oversampling,
+                    detector_shape=init_model.detector_shape,
+                    degree=init_model.degree,
+                    origin=init_model.origin,
+                    fill_value=init_model.fill_value,
+                    detector_origin=init_model.detector_origin,
+                    detector_span=init_model.detector_span,
+                    normalize_local_epsf=init_model.normalize_local_epsf,
+                    trust_map=getattr(init_model, 'trust_map', None),
+                    epsf_class=init_model.epsf_class,
+                    dependencies=dependencies,
+                    clip_negative=self.clip_negative,
+                    flux_correction_mode=self.flux_correction_mode,
+                    flux_coeff_data=flux_coeff_data,
+                    flux_degree=flux_degree,
+                    flux_reference=flux_reference,
+                    flux_scale=flux_scale,
+                    fwhm_correction_mode=self.fwhm_correction_mode,
+                    fwhm_coeff_data=fwhm_coeff_data,
+                    fwhm_degree=fwhm_degree,
+                    fwhm_reference=fwhm_reference,
+                    fwhm_scale=fwhm_scale)
 
             if isinstance(init_model, SpatialEPSFModel):
                 return VariableEPSFModel(
@@ -1007,9 +1188,17 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                       f'{self.maxiters} starting')
             variable_model = variable_model.deepcopy()
 
+            self._log_model_evaluation_diagnostics(variable_model, stars,
+                                                   iter_num)
+
             self._log(f'VariableEPSFBuilder: iteration {iter_num} fitting '
                       'stars')
             fitted_stars_raw = self.variable_fitter(variable_model, stars)
+            n_ok, n_overlap, n_fit_error = self._count_fit_statuses(
+                fitted_stars_raw)
+            self._log(f'VariableEPSFBuilder: iteration {iter_num} fit status '
+                      f'ok={n_ok}, overlap={n_overlap}, '
+                      f'fit_error={n_fit_error}')
 
             self._log(f'VariableEPSFBuilder: iteration {iter_num} fitting '
                       'spatial PPE correction surfaces')
@@ -1042,13 +1231,16 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
             trust_map = self._compute_trust_map_from_residuals(
                 residuals, weights)
 
-            self._log(f'VariableEPSFBuilder: iteration {iter_num} fitting '
-                      'baseline residual coefficient surfaces')
-            coeff_update = self._fit_residual_coefficients(
-                residuals, det_x, det_y, x_coords=x_coords,
-                y_coords=y_coords)
+            coeff_update = np.zeros_like(variable_model.spatial_coeff_data)
+            if 'Position' in self.fit_dependencies:
+                self._log(f'VariableEPSFBuilder: iteration {iter_num} '
+                          'fitting baseline residual coefficient surfaces')
+                coeff_update = self._fit_residual_coefficients(
+                    residuals, det_x, det_y, x_coords=x_coords,
+                    y_coords=y_coords)
 
-            if self._residual_smooth_kernel is not None:
+            if ('Position' in self.fit_dependencies
+                    and self._residual_smooth_kernel is not None):
                 self._log(f'VariableEPSFBuilder: iteration {iter_num} '
                           'smoothing residual coefficient surfaces')
                 for ibasis in range(coeff_update.shape[0]):
@@ -1076,13 +1268,14 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
             effective_fwhm = None
             flux_residuals = None
             fwhm_residuals = None
-            if ('Flux' in self.dependencies or 'FWHM' in self.dependencies):
-                if 'Flux' in self.dependencies:
+            if (variable_model.has_flux_dependency
+                    or variable_model.has_fwhm_dependency):
+                if variable_model.has_flux_dependency:
                     effective_flux = self._collect_effective_flux_samples(
                         residual_stars)
                 else:
                     effective_flux = np.full(len(det_x), np.nan)
-                if 'FWHM' in self.dependencies:
+                if variable_model.has_fwhm_dependency:
                     effective_fwhm = self._collect_effective_fwhm_samples(
                         residual_stars, spatial_model=variable_model)
                 else:
@@ -1090,39 +1283,47 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 model_data = self._sample_model_data(
                     variable_model, det_x, det_y, effective_flux,
                     effective_fwhm)
-                if 'Flux' in self.dependencies:
+                if 'Flux' in self.fit_dependencies:
                     flux_residuals = self._correction_residuals(
                         residuals, model_data, self.flux_correction_mode)
-                if 'FWHM' in self.dependencies:
+                if 'FWHM' in self.fit_dependencies:
                     fwhm_residuals = self._correction_residuals(
                         residuals, model_data, self.fwhm_correction_mode)
 
-            if 'Flux' in self.dependencies:
+            if 'Flux' in self.fit_dependencies:
                 self._log(f'VariableEPSFBuilder: iteration {iter_num} '
                           f'fitting {self.flux_correction_mode} flux '
                           'coefficient surfaces')
                 flux_coeff_update, flux_reference, flux_scale = (
                     self._fit_flux_coefficients(flux_residuals, weights,
-                                                effective_flux))
+                                                effective_flux,
+                                                variable_model.flux_degree))
 
             fwhm_reference = variable_model.fwhm_reference
             fwhm_scale = variable_model.fwhm_scale
             fwhm_coeff_update = None
-            if 'FWHM' in self.dependencies:
+            if 'FWHM' in self.fit_dependencies:
                 self._log(f'VariableEPSFBuilder: iteration {iter_num} '
                           f'fitting {self.fwhm_correction_mode} FWHM '
                           'coefficient surfaces')
                 fwhm_coeff_update, fwhm_reference, fwhm_scale = (
                     self._fit_fwhm_coefficients(fwhm_residuals, weights,
-                                                effective_fwhm))
+                                                effective_fwhm,
+                                                variable_model.fwhm_degree))
 
             self._log(f'VariableEPSFBuilder: iteration {iter_num} updating '
                       'variable ePSF coefficients')
             spatial_coeff_data = variable_model.spatial_coeff_data.copy()
-            spatial_coeff_data += self.residual_update_fraction * coeff_update
+            if 'Position' in self.fit_dependencies:
+                spatial_coeff_data += (self.residual_update_fraction
+                                       * coeff_update)
 
             flux_coeff_data = None
-            if 'Flux' in self.dependencies:
+            if variable_model.has_flux_dependency:
+                flux_coeff_data = variable_model.flux_coeff_data
+                if flux_coeff_data is not None:
+                    flux_coeff_data = flux_coeff_data.copy()
+            if 'Flux' in self.fit_dependencies:
                 old_flux_coeff = (np.zeros_like(flux_coeff_update)
                                   if variable_model.flux_coeff_data is None
                                   else variable_model.flux_coeff_data)
@@ -1131,7 +1332,11 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                                    * flux_coeff_update)
 
             fwhm_coeff_data = None
-            if 'FWHM' in self.dependencies:
+            if variable_model.has_fwhm_dependency:
+                fwhm_coeff_data = variable_model.fwhm_coeff_data
+                if fwhm_coeff_data is not None:
+                    fwhm_coeff_data = fwhm_coeff_data.copy()
+            if 'FWHM' in self.fit_dependencies:
                 old_fwhm_coeff = (np.zeros_like(fwhm_coeff_update)
                                   if variable_model.fwhm_coeff_data is None
                                   else variable_model.fwhm_coeff_data)
@@ -1141,15 +1346,19 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
 
             self._log(f'VariableEPSFBuilder: iteration {iter_num} smoothing '
                       'coefficient images')
-            spatial_coeff_data = self._smooth_coefficients(spatial_coeff_data)
-            if flux_coeff_data is not None:
+            if 'Position' in self.fit_dependencies:
+                spatial_coeff_data = self._smooth_coefficients(
+                    spatial_coeff_data)
+            if ('Flux' in self.fit_dependencies
+                    and flux_coeff_data is not None):
                 flux_coeff_data = self._smooth_coefficients(flux_coeff_data)
-            if fwhm_coeff_data is not None:
+            if ('FWHM' in self.fit_dependencies
+                    and fwhm_coeff_data is not None):
                 fwhm_coeff_data = self._smooth_coefficients(fwhm_coeff_data)
 
             sample_positions = list(zip(det_x, det_y, strict=True))
 
-            if self.recenter_epsf:
+            if self.recenter_epsf and 'Position' in self.fit_dependencies:
                 self._log(f'VariableEPSFBuilder: iteration {iter_num} '
                           'recentering variable ePSF')
                 dx, dy = self._measure_recentering_shift(spatial_coeff_data,
@@ -1164,8 +1373,9 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
 
             self._log(f'VariableEPSFBuilder: iteration {iter_num} '
                       'normalizing variable ePSF')
-            spatial_coeff_data = self._normalise_coefficients(
-                spatial_coeff_data, sample_positions)
+            if 'Position' in self.fit_dependencies:
+                spatial_coeff_data = self._normalise_coefficients(
+                    spatial_coeff_data, sample_positions)
 
             self._log(f'VariableEPSFBuilder: iteration {iter_num} rebuilding '
                       'variable model object')
@@ -1181,16 +1391,16 @@ class VariableEPSFBuilder(SpatialEPSFBuilder):
                 normalize_local_epsf=self.normalise_epsf,
                 trust_map=trust_map,
                 epsf_class=self.epsf_class,
-                dependencies=self.dependencies,
+                dependencies=variable_model.dependencies,
                 clip_negative=self.clip_negative,
                 flux_correction_mode=self.flux_correction_mode,
                 flux_coeff_data=flux_coeff_data,
-                flux_degree=self.flux_degree,
+                flux_degree=variable_model.flux_degree,
                 flux_reference=flux_reference,
                 flux_scale=flux_scale,
                 fwhm_correction_mode=self.fwhm_correction_mode,
                 fwhm_coeff_data=fwhm_coeff_data,
-                fwhm_degree=self.fwhm_degree,
+                fwhm_degree=variable_model.fwhm_degree,
                 fwhm_reference=fwhm_reference,
                 fwhm_scale=fwhm_scale)
 
